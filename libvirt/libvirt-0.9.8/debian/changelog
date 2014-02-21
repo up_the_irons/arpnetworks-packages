@@ -1,3 +1,18 @@
+libvirt (0.9.8-2ubuntu17.18~ppa1) precise; urgency=low
+
+  Removed a series of dependencies we don't need
+
+  Specifically:
+
+    * Removed Upstart requirement in debian/rules
+    * Removed Avahi support
+    * Removed PolicyKit support
+    * Removed HAL and udev support
+    * Removed OpenVZ, Xen, VBox, UML, and LXC support
+    * Removed DHCP and IP from default network
+
+ -- Garry Dolley <gdolley@arpnetworks.com>  Thu, 20 Feb 2014 05:04:47 -0800
+
 libvirt (0.9.8-2ubuntu17.17) precise-security; urgency=medium
 
   * SECURITY UPDATE: denial of service via job usage issues in several APIs

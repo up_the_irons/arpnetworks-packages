@@ -7,7 +7,6 @@ etc/apparmor.d/usr.sbin.libvirtd
 etc/apparmor.d/local/usr.sbin.libvirtd
 etc/libvirt/*
 etc/sasl2/*
-usr/share/polkit-1
 usr/lib/libvirt/*
 usr/share/augeas/*
 usr/share/libvirt/*
