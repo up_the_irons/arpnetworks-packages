@@ -1,0 +1,27 @@
+From cdf76c2073c785c4c0af4a29751769bf89114252 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sat, 28 May 2011 11:01:39 -0400
+Subject: [PATCH 13/91] Only show CONFIG_PS2_KEYBOARD_SPINUP when
+ CONFIG_COREBOOT.
+
+Signed-off-by: Kevin O'Connor <kevin@koconnor.net>
+---
+ src/Kconfig |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index 2195bad..15485ac 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -126,7 +126,7 @@ menu "Hardware support"
+         help
+             Support PS2 ports (keyboard and mouse).
+     config PS2_KEYBOARD_SPINUP
+-        depends on PS2PORT
++        depends on PS2PORT && COREBOOT
+         int "Extra time (in ms) to allow a keyboard to initialize"
+         default 0
+         help
+-- 
+1.7.5.4
+

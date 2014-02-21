@@ -1,0 +1,37 @@
+From a8c6a4e820d214e03ab591b11f0fdf5803718378 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 14 Jul 2011 16:23:59 +0200
+Subject: [PATCH 74/91] ahci/sata: Fix FIS setup.
+
+FIS setup does't follow the SATA specs, fix it.
+
+Credits go to Jonathan Kollasch and Scott Duplichan for finding those.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+---
+ src/ahci.c |    7 +++----
+ 1 files changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/src/ahci.c b/src/ahci.c
+index fb4b70c..058416c 100644
+--- a/src/ahci.c
++++ b/src/ahci.c
+@@ -125,12 +125,11 @@ static int ahci_command(struct ahci_port_s *port, int iswrite, int isatapi,
+         return -1;
+ 
+     flags = ((1 << 16) | /* one prd entry */
+-             (1 << 10) | /* clear busy on ok */
+              (iswrite ? (1 << 6) : 0) |
+              (isatapi ? (1 << 5) : 0) |
+-             (4 << 0)); /* fis length (dwords) */
+-    SET_FLATPTR(list[0].flags, flags);
+-    SET_FLATPTR(list[0].bytes,  bsize);
++             (5 << 0)); /* fis length (dwords) */
++    SET_FLATPTR(list[0].flags,  flags);
++    SET_FLATPTR(list[0].bytes,  0);
+     SET_FLATPTR(list[0].base,   ((u32)(cmd)));
+     SET_FLATPTR(list[0].baseu,  0);
+ 
+-- 
+1.7.5.4
+

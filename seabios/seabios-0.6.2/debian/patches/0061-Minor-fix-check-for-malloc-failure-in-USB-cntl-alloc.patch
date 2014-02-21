@@ -1,0 +1,61 @@
+From ffdcd3a8d72310efc55255fc93edf78c024bbafe Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sun, 10 Jul 2011 15:48:00 -0400
+Subject: [PATCH 61/91] Minor fix - check for malloc failure in USB cntl
+ allocation.
+
+Signed-off-by: Kevin O'Connor <kevin@koconnor.net>
+---
+ src/usb-ehci.c |    4 ++++
+ src/usb-ohci.c |    4 ++++
+ src/usb-uhci.c |    4 ++++
+ 3 files changed, 12 insertions(+), 0 deletions(-)
+
+diff --git a/src/usb-ehci.c b/src/usb-ehci.c
+index 5028c0d..a60c607 100644
+--- a/src/usb-ehci.c
++++ b/src/usb-ehci.c
+@@ -263,6 +263,10 @@ ehci_init(struct pci_device *pci, int busid, struct pci_device *comppci)
+     }
+ 
+     struct usb_ehci_s *cntl = malloc_tmphigh(sizeof(*cntl));
++    if (!cntl) {
++        warn_noalloc();
++        return -1;
++    }
+     memset(cntl, 0, sizeof(*cntl));
+     cntl->usb.busid = busid;
+     cntl->usb.pci = pci;
+diff --git a/src/usb-ohci.c b/src/usb-ohci.c
+index 317f200..9107db2 100644
+--- a/src/usb-ohci.c
++++ b/src/usb-ohci.c
+@@ -209,6 +209,10 @@ ohci_init(struct pci_device *pci, int busid)
+     if (! CONFIG_USB_OHCI)
+         return;
+     struct usb_ohci_s *cntl = malloc_tmphigh(sizeof(*cntl));
++    if (!cntl) {
++        warn_noalloc();
++        return;
++    }
+     memset(cntl, 0, sizeof(*cntl));
+     cntl->usb.busid = busid;
+     cntl->usb.pci = pci;
+diff --git a/src/usb-uhci.c b/src/usb-uhci.c
+index 6e45474..f3680d3 100644
+--- a/src/usb-uhci.c
++++ b/src/usb-uhci.c
+@@ -185,6 +185,10 @@ uhci_init(struct pci_device *pci, int busid)
+         return;
+     u16 bdf = pci->bdf;
+     struct usb_uhci_s *cntl = malloc_tmphigh(sizeof(*cntl));
++    if (!cntl) {
++        warn_noalloc();
++        return;
++    }
+     memset(cntl, 0, sizeof(*cntl));
+     cntl->usb.busid = busid;
+     cntl->usb.pci = pci;
+-- 
+1.7.5.4
+

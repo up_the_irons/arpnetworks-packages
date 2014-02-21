@@ -1,0 +1,30 @@
+From ceb8ed4ef2e45cc5cc2525aeebd255838f656b69 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 4 Aug 2011 20:42:16 +0200
+Subject: [PATCH 90/91] ahci: enable by default
+
+Lack of real hardware testing was the main reason to turn it off by
+default.  The AHCI has been fixed to work on both qemu and real
+hardware, so lets flip the switch now.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+---
+ src/Kconfig |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index 81acc1c..338f51a 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -104,7 +104,7 @@ menu "Hardware support"
+     config AHCI
+         depends on DRIVES
+         bool "AHCI controllers"
+-        default n
++        default y
+         help
+             Support for AHCI disk code.
+     config VIRTIO_BLK
+-- 
+1.7.5.4
+

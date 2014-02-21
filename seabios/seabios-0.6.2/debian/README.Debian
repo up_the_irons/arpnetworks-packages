@@ -1,0 +1,7 @@
+seabios for Debian
+------------------
+
+This package's source and binary code was previously distributed as part the
+qemu, qemu-kvm, and kvm packages.  It is now packaged on its own.
+
+ -- Dustin Kirkland <kirkland@ubuntu.com>  Sun, 17 Jan 2010 14:55:10 +1300

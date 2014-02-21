@@ -1,0 +1,87 @@
+From 9c8699290b9cec2ad36d8a9b9a3b441887961aaf Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 14 Jul 2011 16:24:05 +0200
+Subject: [PATCH 80/91] ahci: bootprio support
+
+Wind up bootprio support in the ahci driver so boot device ordering
+works for ahci disks too.  No extra work needed on qemu side.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+---
+ src/ahci.c |   15 ++++++++++-----
+ src/ahci.h |    3 ++-
+ 2 files changed, 12 insertions(+), 6 deletions(-)
+
+diff --git a/src/ahci.c b/src/ahci.c
+index 1f119bb..99bd0bb 100644
+--- a/src/ahci.c
++++ b/src/ahci.c
+@@ -541,7 +541,8 @@ static int ahci_port_init(struct ahci_port_s *port)
+         dprintf(1, "%s\n", desc);
+ 
+         // Register with bcv system.
+-        boot_add_hd(&port->drive, desc, -1);
++        int prio = bootprio_find_ata_device(ctrl->pci_tmp, pnr, 0);
++        boot_add_hd(&port->drive, desc, prio);
+     } else {
+         // found cdrom (atapi)
+         port->drive.blksize = CDROM_SECTOR_SIZE;
+@@ -556,8 +557,10 @@ static int ahci_port_init(struct ahci_port_s *port)
+         dprintf(1, "%s\n", desc);
+ 
+         // fill cdidmap
+-        if (iscd)
+-            boot_add_cd(&port->drive, desc, -1);
++        if (iscd) {
++            int prio = bootprio_find_ata_device(ctrl->pci_tmp, pnr, 0);
++            boot_add_cd(&port->drive, desc, prio);
++        }
+     }
+     return 0;
+ }
+@@ -590,9 +593,10 @@ ahci_detect(void *data)
+ 
+ // Initialize an ata controller and detect its drives.
+ static void
+-ahci_init_controller(int bdf)
++ahci_init_controller(struct pci_device *pci)
+ {
+     struct ahci_ctrl_s *ctrl = malloc_fseg(sizeof(*ctrl));
++    u16 bdf = pci->bdf;
+     u32 val;
+ 
+     if (!ctrl) {
+@@ -606,6 +610,7 @@ ahci_init_controller(int bdf)
+         return;
+     }
+ 
++    ctrl->pci_tmp = pci;
+     ctrl->pci_bdf = bdf;
+     ctrl->iobase = pci_config_readl(bdf, PCI_BASE_ADDRESS_5);
+     ctrl->irq = pci_config_readb(bdf, PCI_INTERRUPT_LINE);
+@@ -637,7 +642,7 @@ ahci_init(void)
+             continue;
+         if (pci->prog_if != 1 /* AHCI rev 1 */)
+             continue;
+-        ahci_init_controller(pci->bdf);
++        ahci_init_controller(pci);
+     }
+ }
+ 
+diff --git a/src/ahci.h b/src/ahci.h
+index 0e13e00..98ade63 100644
+--- a/src/ahci.h
++++ b/src/ahci.h
+@@ -26,7 +26,8 @@ struct sata_cmd_fis {
+ };
+ 
+ struct ahci_ctrl_s {
+-    int pci_bdf;
++    struct pci_device *pci_tmp;
++    u16 pci_bdf;
+     u8  irq;
+     u32 iobase;
+     u32 caps;
+-- 
+1.7.5.4
+

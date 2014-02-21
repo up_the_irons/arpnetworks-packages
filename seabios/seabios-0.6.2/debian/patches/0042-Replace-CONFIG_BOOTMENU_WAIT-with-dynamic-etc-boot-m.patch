@@ -1,0 +1,55 @@
+From 730230063c4194a1977589bba0beec6bfedb6514 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Tue, 5 Jul 2011 20:34:34 -0400
+Subject: [PATCH 42/91] Replace CONFIG_BOOTMENU_WAIT with dynamic
+ "etc/boot-menu-wait" file.
+
+---
+ src/Kconfig |    6 ------
+ src/boot.c  |    5 ++++-
+ 2 files changed, 4 insertions(+), 7 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index 70e3509..0ffc49e 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -46,12 +46,6 @@ menu "General Features"
+         default y
+         help
+             Support an interactive boot menu at end of post.
+-    config BOOTMENU_WAIT
+-        depends on BOOTMENU
+-        int "Bootmenu delay"
+-        default 2500
+-        help
+-            Amount of time (in ms) to wait at menu before selecting normal boot.
+     config BOOTSPLASH
+         depends on BOOTMENU
+         bool "Graphical boot splash screen"
+diff --git a/src/boot.c b/src/boot.c
+index f3c165c..fcc95ab 100644
+--- a/src/boot.c
++++ b/src/boot.c
+@@ -377,6 +377,8 @@ boot_add_cbfs(void *data, const char *desc, int prio)
+  * Boot menu and BCV execution
+  ****************************************************************/
+ 
++#define DEFAULT_BOOTMENU_WAIT 2500
++
+ // Show IPL option menu.
+ static void
+ interactive_bootmenu(void)
+@@ -389,8 +391,9 @@ interactive_bootmenu(void)
+ 
+     printf("Press F12 for boot menu.\n\n");
+ 
++    u32 menutime = romfile_loadint("etc/boot-menu-wait", DEFAULT_BOOTMENU_WAIT);
+     enable_bootsplash();
+-    int scan_code = get_keystroke(CONFIG_BOOTMENU_WAIT);
++    int scan_code = get_keystroke(menutime);
+     disable_bootsplash();
+     if (scan_code != 0x86)
+         /* not F12 */
+-- 
+1.7.5.4
+

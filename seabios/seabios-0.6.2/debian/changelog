@@ -1,0 +1,71 @@
+seabios (0.6.2-0ubuntu2.1) precise-proposed; urgency=low
+
+  * Update maintainer
+  * Cherrypicked debian/patches/fix-alignment-bug-in-pci_bios_init_root_regions
+    from upstream (LP: #930634)
+
+ -- Serge Hallyn <serge.hallyn@ubuntu.com>  Fri, 04 May 2012 11:04:27 -0500
+
+seabios (0.6.2-0ubuntu2) precise; urgency=low
+
+  * Add all patches up to commit 8e301472e324b6d6496d8b4ffc66863e99d7a505
+    to match what is shipped with qemu-kvm.  This includes the fix for a
+    black screen when running kvm with -vga qxl.  (LP: #823494)
+  * debian/rules: address lintian warning:
+    debian-rules-missing-recommended-target
+
+ -- Serge Hallyn <serge.hallyn@ubuntu.com>  Thu, 17 Nov 2011 12:31:22 -0600
+
+seabios (0.6.2-0ubuntu1) oneiric; urgency=low
+
+  * Merge 0.6.2
+    - explicitly add patch 88db9fd632bf3f650244ec69e2f4fd6b2aa5fd3d to
+      fix FTBFS.
+
+ -- Serge Hallyn <serge.hallyn@ubuntu.com>  Thu, 19 May 2011 10:53:14 -0500
+
+seabios (0.6.1.2-0ubuntu1) natty; urgency=low
+
+  [ Serge Hallyn ]
+  * upstream merge
+    - updated debian/watch
+    - remove all patches as they are applied upstream
+    - removed debian-changes-0.6.0-0ubuntu2 - I'm not certain about this one,
+      so it may re-introduce a regression
+
+  [ Dustin Kirkland ]
+  * debian/rules: fix lintian warnings, install changelog, make binary build
+    arch indep
+  * debian/control: update standards version
+
+ -- Serge Hallyn <serge.hallyn@ubuntu.com>  Mon, 14 Feb 2011 14:38:50 -0600
+
+seabios (0.6.0-0ubuntu2) natty; urgency=low
+
+  * Add all patches which were included in qemu-0.13.0-rc2 (per
+    commit on Jul 13, 2010).
+
+ -- Serge Hallyn <serge.hallyn@canonical.com>  Fri, 22 Oct 2010 11:04:31 -0500
+
+seabios (0.6.0-0ubuntu1) maverick; urgency=low
+
+  * Merge 0.6.0 release
+    * also add all the patches from git which are included in qemu since
+      May 11 (per qemu commit 14ac15d3ac8e0ef1c91204e2ac772b6412a6b99e)
+    * plus the two next git patches, which are also needed for (LP: #598649)
+  * switched to dpkg-source 3.0 (quilt) format
+  * add a watch file
+
+ -- Serge Hallyn <serge.hallyn@canonical.com>  Tue, 29 Jun 2010 10:42:46 -0500
+
+seabios (0.5.1-0ubuntu2) lucid; urgency=low
+
+  * debian/control: we only need to build this once on i386 for all arches
+
+ -- Dustin Kirkland <kirkland@ubuntu.com>  Wed, 20 Jan 2010 11:52:10 +1300
+
+seabios (0.5.1-0ubuntu1) lucid; urgency=low
+
+  * Initial packaging
+
+ -- Dustin Kirkland <kirkland@ubuntu.com>  Sun, 17 Jan 2010 14:55:10 +1300

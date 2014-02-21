@@ -1,0 +1,41 @@
+From e5de5ec102b5490279ceb64328bd734ddb7eaed1 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Tue, 5 Jul 2011 20:57:07 -0400
+Subject: [PATCH 48/91] Add utility "tools/encodeint.py" for CBFS config file
+ creation.
+
+---
+ tools/encodeint.py |   21 +++++++++++++++++++++
+ 1 files changed, 21 insertions(+), 0 deletions(-)
+ create mode 100755 tools/encodeint.py
+
+diff --git a/tools/encodeint.py b/tools/encodeint.py
+new file mode 100755
+index 0000000..12be5fe
+--- /dev/null
++++ b/tools/encodeint.py
+@@ -0,0 +1,21 @@
++#!/usr/bin/env python
++# Encode an integer in little endian format in a file.
++#
++# Copyright (C) 2011  Kevin O'Connor <kevin@koconnor.net>
++#
++# This file may be distributed under the terms of the GNU GPLv3 license.
++
++import sys
++import struct
++
++def main():
++    filename = sys.argv[1]
++    value = int(sys.argv[2])
++
++    outval = struct.pack('<Q', value)
++    f = open(filename, 'wb')
++    f.write(outval)
++    f.close()
++
++if __name__ == '__main__':
++    main()
+-- 
+1.7.5.4
+

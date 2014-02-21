@@ -1,0 +1,28 @@
+From f31171c11f500c8818a1628ff1b4908a97eb6a85 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sat, 7 May 2011 13:57:42 -0400
+Subject: [PATCH 05/91] Minor Kconfig help update.
+
+---
+ src/Kconfig |    5 +++++
+ 1 files changed, 5 insertions(+), 0 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index 6d55b23..3133d88 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -22,6 +22,11 @@ menu "General Features"
+         help
+             Allow hardware init to run in parallel with optionrom execution.
+ 
++            This can reduce boot time, but can cause some timing
++            variations during option ROM code execution.  It is not
++            known if all option ROMs will behave properly with this
++            option.
++
+     config RELOCATE_INIT
+         bool "Copy init code to high memory"
+         default y
+-- 
+1.7.5.4
+

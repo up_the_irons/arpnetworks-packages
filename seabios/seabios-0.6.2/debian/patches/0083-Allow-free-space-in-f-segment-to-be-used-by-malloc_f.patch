@@ -1,0 +1,45 @@
+From 8b9137d29561e958ba557ba31e73da71d3b03249 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Wed, 3 Aug 2011 20:15:26 -0400
+Subject: [PATCH 83/91] Allow free space in f-segment to be used by
+ malloc_fseg().
+
+---
+ src/optionroms.c |    2 +-
+ src/pmm.c        |    7 +++++++
+ 2 files changed, 8 insertions(+), 1 deletions(-)
+
+diff --git a/src/optionroms.c b/src/optionroms.c
+index be02f2a..2832eab 100644
+--- a/src/optionroms.c
++++ b/src/optionroms.c
+@@ -483,7 +483,7 @@ vga_setup(void)
+         init_optionrom((void*)BUILD_ROM_START, 0, 1);
+     } else {
+         // Clear option rom memory
+-        memset((void*)RomEnd, 0, _max_rom() - RomEnd);
++        memset((void*)RomEnd, 0, max_rom() - RomEnd);
+ 
+         // Find and deploy PCI VGA rom.
+         struct pci_device *pci;
+diff --git a/src/pmm.c b/src/pmm.c
+index b812515..82a0b1d 100644
+--- a/src/pmm.c
++++ b/src/pmm.c
+@@ -216,6 +216,13 @@ malloc_fixupreloc(void)
+         struct zone_s *zone = Zones[i];
+         zone->info->pprev = &zone->info;
+     }
++
++    // Add space free'd during relocation in f-segment to ZoneFSeg
++    extern u8 code32init_end[];
++    if ((u32)code32init_end > BUILD_BIOS_ADDR) {
++        memset((void*)BUILD_BIOS_ADDR, 0, (u32)code32init_end - BUILD_BIOS_ADDR);
++        addSpace(&ZoneFSeg, (void*)BUILD_BIOS_ADDR, code32init_end);
++    }
+ }
+ 
+ void
+-- 
+1.7.5.4
+

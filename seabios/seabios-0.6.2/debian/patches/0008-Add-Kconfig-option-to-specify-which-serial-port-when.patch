@@ -1,0 +1,83 @@
+From d12e8a2aa41a0d7b40afde44f543119500475717 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Tue, 10 May 2011 23:36:11 -0400
+Subject: [PATCH 08/91] Add Kconfig option to specify which serial port when
+ serial debugging.
+
+---
+ src/Kconfig  |    6 ++++++
+ src/output.c |   15 +++++++--------
+ 2 files changed, 13 insertions(+), 8 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index 0da69e6..123db01 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -371,6 +371,12 @@ menu "Debugging"
+         default n
+         help
+             Send debugging information to serial port.
++    config DEBUG_SERIAL_PORT
++        depends on DEBUG_SERIAL
++        hex "Serial port base address"
++        default 0x3f8
++        help
++            Base port for serial - generally 0x3f8, 0x2f8, 0x3e8, or 0x2e8.
+ 
+     config SCREEN_AND_DEBUG
+         depends on DEBUG_LEVEL != 0
+diff --git a/src/output.c b/src/output.c
+index 4c9f95b..7c10d33 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -21,7 +21,6 @@ struct putcinfo {
+  * Debug output
+  ****************************************************************/
+ 
+-#define DEBUG_PORT PORT_SERIAL1
+ #define DEBUG_TIMEOUT 100000
+ 
+ void
+@@ -31,12 +30,12 @@ debug_serial_setup(void)
+         return;
+     // setup for serial logging: 8N1
+     u8 oldparam, newparam = 0x03;
+-    oldparam = inb(DEBUG_PORT+SEROFF_LCR);
+-    outb(newparam, DEBUG_PORT+SEROFF_LCR);
++    oldparam = inb(CONFIG_DEBUG_SERIAL_PORT+SEROFF_LCR);
++    outb(newparam, CONFIG_DEBUG_SERIAL_PORT+SEROFF_LCR);
+     // Disable irqs
+     u8 oldier, newier = 0;
+-    oldier = inb(DEBUG_PORT+SEROFF_IER);
+-    outb(newier, DEBUG_PORT+SEROFF_IER);
++    oldier = inb(CONFIG_DEBUG_SERIAL_PORT+SEROFF_IER);
++    outb(newier, CONFIG_DEBUG_SERIAL_PORT+SEROFF_IER);
+ 
+     if (oldparam != newparam || oldier != newier)
+         dprintf(1, "Changing serial settings was %x/%x now %x/%x\n"
+@@ -50,11 +49,11 @@ debug_serial(char c)
+     if (!CONFIG_DEBUG_SERIAL)
+         return;
+     int timeout = DEBUG_TIMEOUT;
+-    while ((inb(DEBUG_PORT+SEROFF_LSR) & 0x60) != 0x60)
++    while ((inb(CONFIG_DEBUG_SERIAL_PORT+SEROFF_LSR) & 0x60) != 0x60)
+         if (!timeout--)
+             // Ran out of time.
+             return;
+-    outb(c, DEBUG_PORT+SEROFF_DATA);
++    outb(c, CONFIG_DEBUG_SERIAL_PORT+SEROFF_DATA);
+ }
+ 
+ // Make sure all serial port writes have been completely sent.
+@@ -64,7 +63,7 @@ debug_serial_flush(void)
+     if (!CONFIG_DEBUG_SERIAL)
+         return;
+     int timeout = DEBUG_TIMEOUT;
+-    while ((inb(DEBUG_PORT+SEROFF_LSR) & 0x40) != 0x40)
++    while ((inb(CONFIG_DEBUG_SERIAL_PORT+SEROFF_LSR) & 0x40) != 0x40)
+         if (!timeout--)
+             // Ran out of time.
+             return;
+-- 
+1.7.5.4
+

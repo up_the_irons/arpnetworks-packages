@@ -1,0 +1,212 @@
+From 0cd700562357525c2975c5786d34afc237487b2d Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sat, 2 Jul 2011 14:04:19 -0400
+Subject: [PATCH 37/91] Convert pci_find_device/class to use 'struct
+ pci_device'.
+
+---
+ src/acpi.c     |    2 +-
+ src/floppy.c   |    4 ++--
+ src/pci.c      |   27 ++++++++++++---------------
+ src/pci.h      |    4 ++--
+ src/smm.c      |   10 +++++-----
+ src/vgahooks.c |   30 ++++++++++++++++--------------
+ 6 files changed, 38 insertions(+), 39 deletions(-)
+
+diff --git a/src/acpi.c b/src/acpi.c
+index fc7867a..ea7b171 100644
+--- a/src/acpi.c
++++ b/src/acpi.c
+@@ -7,7 +7,7 @@
+ 
+ #include "acpi.h" // struct rsdp_descriptor
+ #include "util.h" // memcpy
+-#include "pci.h" // pci_find_device
++#include "pci.h" // pci_find_init_device
+ #include "biosvar.h" // GET_EBDA
+ #include "pci_ids.h" // PCI_VENDOR_ID_INTEL
+ #include "pci_regs.h" // PCI_INTERRUPT_LINE
+diff --git a/src/floppy.c b/src/floppy.c
+index edc675d..8009af0 100644
+--- a/src/floppy.c
++++ b/src/floppy.c
+@@ -123,8 +123,8 @@ addFloppy(int floppyid, int ftype)
+     if (!drive_g)
+         return;
+     char *desc = znprintf(MAXDESCSIZE, "Floppy [drive %c]", 'A' + floppyid);
+-    int bdf = pci_find_class(PCI_CLASS_BRIDGE_ISA); /* isa-to-pci bridge */
+-    int prio = bootprio_find_fdc_device(bdf, PORT_FD_BASE, floppyid);
++    struct pci_device *pci = pci_find_class(PCI_CLASS_BRIDGE_ISA); /* isa-to-pci bridge */
++    int prio = bootprio_find_fdc_device(pci->bdf, PORT_FD_BASE, floppyid);
+     boot_add_floppy(drive_g, desc, prio);
+ }
+ 
+diff --git a/src/pci.c b/src/pci.c
+index 78bbac2..bbb58cf 100644
+--- a/src/pci.c
++++ b/src/pci.c
+@@ -164,30 +164,27 @@ pci_probe(void)
+ }
+ 
+ // Search for a device with the specified vendor and device ids.
+-int
++struct pci_device *
+ pci_find_device(u16 vendid, u16 devid)
+ {
+-    u32 id = (devid << 16) | vendid;
+-    int bdf, max;
+-    foreachbdf(bdf, max) {
+-        u32 v = pci_config_readl(bdf, PCI_VENDOR_ID);
+-        if (v == id)
+-            return bdf;
++    struct pci_device *pci;
++    foreachpci(pci) {
++        if (pci->vendor == vendid && pci->device == devid)
++            return pci;
+     }
+-    return -1;
++    return NULL;
+ }
+ 
+ // Search for a device with the specified class id.
+-int
++struct pci_device *
+ pci_find_class(u16 classid)
+ {
+-    int bdf, max;
+-    foreachbdf(bdf, max) {
+-        u16 v = pci_config_readw(bdf, PCI_CLASS_DEVICE);
+-        if (v == classid)
+-            return bdf;
++    struct pci_device *pci;
++    foreachpci(pci) {
++        if (pci->class == classid)
++            return pci;
+     }
+-    return -1;
++    return NULL;
+ }
+ 
+ int pci_init_device(const struct pci_device_id *ids
+diff --git a/src/pci.h b/src/pci.h
+index a21a1fd..cde72dc 100644
+--- a/src/pci.h
++++ b/src/pci.h
+@@ -33,8 +33,8 @@ u16 pci_config_readw(u16 bdf, u32 addr);
+ u8 pci_config_readb(u16 bdf, u32 addr);
+ void pci_config_maskw(u16 bdf, u32 addr, u16 off, u16 on);
+ 
+-int pci_find_device(u16 vendid, u16 devid);
+-int pci_find_class(u16 classid);
++struct pci_device *pci_find_device(u16 vendid, u16 devid);
++struct pci_device *pci_find_class(u16 classid);
+ 
+ struct pci_device {
+     u16 bdf;
+diff --git a/src/smm.c b/src/smm.c
+index 9f14cec..72e5e88 100644
+--- a/src/smm.c
++++ b/src/smm.c
+@@ -112,9 +112,9 @@ smm_relocate_and_restore(void)
+ // This code is hardcoded for PIIX4 Power Management device.
+ static void piix4_apmc_smm_init(struct pci_device *pci, void *arg)
+ {
+-    int i440_bdf = pci_find_device(PCI_VENDOR_ID_INTEL
+-                                   , PCI_DEVICE_ID_INTEL_82441);
+-    if (i440_bdf < 0)
++    struct pci_device *i440_pci = pci_find_device(PCI_VENDOR_ID_INTEL
++                                                  , PCI_DEVICE_ID_INTEL_82441);
++    if (!i440_pci)
+         return;
+ 
+     /* check if SMM init is already done */
+@@ -123,7 +123,7 @@ static void piix4_apmc_smm_init(struct pci_device *pci, void *arg)
+         return;
+ 
+     /* enable the SMM memory window */
+-    pci_config_writeb(i440_bdf, I440FX_SMRAM, 0x02 | 0x48);
++    pci_config_writeb(i440_pci->bdf, I440FX_SMRAM, 0x02 | 0x48);
+ 
+     smm_save_and_copy();
+ 
+@@ -133,7 +133,7 @@ static void piix4_apmc_smm_init(struct pci_device *pci, void *arg)
+     smm_relocate_and_restore();
+ 
+     /* close the SMM memory window and enable normal SMM */
+-    pci_config_writeb(i440_bdf, I440FX_SMRAM, 0x02 | 0x08);
++    pci_config_writeb(i440_pci->bdf, I440FX_SMRAM, 0x02 | 0x08);
+ }
+ 
+ static const struct pci_device_id smm_init_tbl[] = {
+diff --git a/src/vgahooks.c b/src/vgahooks.c
+index 16f6b8a..a8f667c 100644
+--- a/src/vgahooks.c
++++ b/src/vgahooks.c
+@@ -83,10 +83,10 @@ via_155f(struct bregs *regs)
+ }
+ 
+ static int
+-getFBSize(u16 bdf)
++getFBSize(struct pci_device *pci)
+ {
+     /* FB config */
+-    u8 reg = pci_config_readb(bdf, 0xa1);
++    u8 reg = pci_config_readb(pci->bdf, 0xa1);
+ 
+     /* GFX disabled ? */
+     if (!(reg & 0x80))
+@@ -97,20 +97,21 @@ getFBSize(u16 bdf)
+ }
+ 
+ static int
+-getViaRamSpeed(u16 bdf)
++getViaRamSpeed(struct pci_device *pci)
+ {
+-    return (pci_config_readb(bdf, 0x90) & 0x07) + 3;
++    return (pci_config_readb(pci->bdf, 0x90) & 0x07) + 3;
+ }
+ 
+ static int
+ getAMDRamSpeed(void)
+ {
+-    int bdf = pci_find_device(PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_K8_NB_MEMCTL);
+-    if (bdf < 0)
++    struct pci_device *pci = pci_find_device(PCI_VENDOR_ID_AMD
++                                             , PCI_DEVICE_ID_AMD_K8_NB_MEMCTL);
++    if (!pci)
+         return -1;
+ 
+     /* mem clk 0 = DDR2 400 */
+-    return (pci_config_readb(bdf, 0x94) & 0x7) + 6;
++    return (pci_config_readb(pci->bdf, 0x94) & 0x7) + 6;
+ }
+ 
+ /* int 0x15 - 5f18
+@@ -142,16 +143,17 @@ via_setup(struct pci_device *pci)
+ {
+     VGAHookHandlerType = VH_VIA;
+ 
+-    int bdf = pci_find_device(PCI_VENDOR_ID_VIA, PCI_DEVICE_ID_VIA_K8M890CE_3);
+-    if (bdf >= 0) {
+-        ViaFBsize = getFBSize(bdf);
++    struct pci_device *d = pci_find_device(PCI_VENDOR_ID_VIA
++                                           , PCI_DEVICE_ID_VIA_K8M890CE_3);
++    if (d) {
++        ViaFBsize = getFBSize(d);
+         ViaRamSpeed = getAMDRamSpeed();
+         return;
+     }
+-    bdf = pci_find_device(PCI_VENDOR_ID_VIA, PCI_DEVICE_ID_VIA_VX855_MEMCTRL);
+-    if (bdf >= 0) {
+-        ViaFBsize = getFBSize(bdf);
+-        ViaRamSpeed = getViaRamSpeed(bdf);
++    d = pci_find_device(PCI_VENDOR_ID_VIA, PCI_DEVICE_ID_VIA_VX855_MEMCTRL);
++    if (d) {
++        ViaFBsize = getFBSize(d);
++        ViaRamSpeed = getViaRamSpeed(d);
+         return;
+     }
+ 
+-- 
+1.7.5.4
+

@@ -1,0 +1,81 @@
+From 3076cfb875b2a4344c87fb8e51063c4f2cbb520b Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sat, 2 Jul 2011 18:39:03 -0400
+Subject: [PATCH 40/91] Replace CONFIG_PCI_ROOT1/2 with
+ CONFIG_EXTRA_PCI_ROOTS.
+
+Instead of defining the bus id of each extra root bus, define the
+number of extra root buses.  The bus id isn't necessarily stable from
+one boot to the next.
+---
+ src/Kconfig |   20 ++++++++------------
+ src/pci.c   |   10 ++++------
+ 2 files changed, 12 insertions(+), 18 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index bbed963..70e3509 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -201,19 +201,15 @@ menu "Hardware support"
+             Support parallel ports. This also enables int 17 parallel port calls.
+ 
+     config EXTRA_PCI_ROOTS
+-        bool "Extra root buses"
+-        default n
++        int "Number of extra root buses"
++        default 0
+         help
+-            If the target machine has multiple independent root buses,
+-            the extra buses may be specified here.
+-    config PCI_ROOT1
+-        depends on EXTRA_PCI_ROOTS
+-        hex "Extra primary PCI root bus number"
+-        default 0x00
+-    config PCI_ROOT2
+-        depends on EXTRA_PCI_ROOTS
+-        hex "Extra secondary PCI root bus number"
+-        default 0x00
++            If the target machine has multiple independent root buses
++            set this to a positive value.  The SeaBIOS PCI probe will
++            then search for the given number of extra root buses.
++
++            Most machines do not have multiple root buses and this
++            setting should be zero.
+ 
+     config USE_SMM
+         depends on !COREBOOT
+diff --git a/src/pci.c b/src/pci.c
+index 0de8ec5..23a6878 100644
+--- a/src/pci.c
++++ b/src/pci.c
+@@ -93,16 +93,12 @@ void
+ pci_probe(void)
+ {
+     dprintf(3, "PCI probe\n");
+-    if (CONFIG_PCI_ROOT1 && CONFIG_PCI_ROOT1 > MaxPCIBus)
+-        MaxPCIBus = CONFIG_PCI_ROOT1;
+-    if (CONFIG_PCI_ROOT2 && CONFIG_PCI_ROOT2 > MaxPCIBus)
+-        MaxPCIBus = CONFIG_PCI_ROOT2;
+-
+     struct pci_device *busdevs[256];
+     memset(busdevs, 0, sizeof(busdevs));
+     struct pci_device **pprev = &PCIDevices;
+     int bus = -1, lastbus = 0, rootbuses = 0, count=0;
+-    while (bus < MaxPCIBus) {
++    while (bus < 0xff && (bus < MaxPCIBus
++                          || rootbuses < CONFIG_EXTRA_PCI_ROOTS)) {
+         bus++;
+         int bdf;
+         foreachbdf(bdf, bus) {
+@@ -125,6 +121,8 @@ pci_probe(void)
+                     rootbuses++;
+                 lastbus = bus;
+                 rootbus = rootbuses;
++                if (bus > MaxPCIBus)
++                    MaxPCIBus = bus;
+             } else {
+                 rootbus = parent->rootbus;
+             }
+-- 
+1.7.5.4
+

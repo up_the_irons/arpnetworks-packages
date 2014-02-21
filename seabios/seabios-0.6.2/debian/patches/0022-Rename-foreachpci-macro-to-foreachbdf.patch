@@ -1,0 +1,292 @@
+From baac6b6e1a3fc2d5e662e685a6bbe196292c2522 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sun, 19 Jun 2011 10:46:28 -0400
+Subject: [PATCH 22/91] Rename foreachpci macro to foreachbdf.
+
+---
+ src/ahci.c       |    4 ++--
+ src/ata.c        |    4 ++--
+ src/mptable.c    |    4 ++--
+ src/optionroms.c |    4 ++--
+ src/pci.c        |   10 +++++-----
+ src/pci.h        |    4 ++--
+ src/pcibios.c    |    6 +++---
+ src/pciinit.c    |    8 ++++----
+ src/usb.c        |    4 ++--
+ src/virtio-blk.c |    4 ++--
+ 10 files changed, 26 insertions(+), 26 deletions(-)
+
+diff --git a/src/ahci.c b/src/ahci.c
+index b820e28..b28597a 100644
+--- a/src/ahci.c
++++ b/src/ahci.c
+@@ -8,7 +8,7 @@
+ #include "ioport.h" // inb
+ #include "util.h" // dprintf
+ #include "biosvar.h" // GET_EBDA
+-#include "pci.h" // foreachpci
++#include "pci.h" // foreachbdf
+ #include "pci_ids.h" // PCI_CLASS_STORAGE_OTHER
+ #include "pci_regs.h" // PCI_INTERRUPT_LINE
+ #include "boot.h" // add_bcv_hd
+@@ -463,7 +463,7 @@ ahci_init(void)
+ {
+     // Scan PCI bus for ATA adapters
+     int bdf, max;
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+         if (pci_config_readw(bdf, PCI_CLASS_DEVICE) != PCI_CLASS_STORAGE_SATA)
+             continue;
+         if (pci_config_readb(bdf, PCI_CLASS_PROG) != 1 /* AHCI rev 1 */)
+diff --git a/src/ata.c b/src/ata.c
+index 95e1352..2630431 100644
+--- a/src/ata.c
++++ b/src/ata.c
+@@ -11,7 +11,7 @@
+ #include "cmos.h" // inb_cmos
+ #include "pic.h" // enable_hwirq
+ #include "biosvar.h" // GET_EBDA
+-#include "pci.h" // foreachpci
++#include "pci.h" // foreachbdf
+ #include "pci_ids.h" // PCI_CLASS_STORAGE_OTHER
+ #include "pci_regs.h" // PCI_INTERRUPT_LINE
+ #include "boot.h" // boot_add_hd
+@@ -1035,7 +1035,7 @@ ata_init(void)
+     // Scan PCI bus for ATA adapters
+     int pcicount=0;
+     int bdf, max;
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+         pcicount++;
+         pci_init_device(pci_ata_tbl, bdf, NULL);
+     }
+diff --git a/src/mptable.c b/src/mptable.c
+index e5952c3..d7cab03 100644
+--- a/src/mptable.c
++++ b/src/mptable.c
+@@ -69,7 +69,7 @@ mptable_init(void)
+     // PCI buses
+     struct mpt_bus *buses = (void*)cpu, *bus = buses;
+     int bdf, max, lastbus = -1;
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+         int curbus = pci_bdf_to_bus(bdf);
+         if (curbus == lastbus)
+             continue;
+@@ -106,7 +106,7 @@ mptable_init(void)
+     int dev = -1;
+     unsigned short mask = 0, pinmask = 0;
+ 
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+         int pin = pci_config_readb(bdf, PCI_INTERRUPT_PIN);
+         int irq = pci_config_readb(bdf, PCI_INTERRUPT_LINE);
+         if (pin == 0)
+diff --git a/src/optionroms.c b/src/optionroms.c
+index 37a4e6c..ff74c4f 100644
+--- a/src/optionroms.c
++++ b/src/optionroms.c
+@@ -9,7 +9,7 @@
+ #include "farptr.h" // FLATPTR_TO_SEG
+ #include "config.h" // CONFIG_*
+ #include "util.h" // dprintf
+-#include "pci.h" // foreachpci
++#include "pci.h" // foreachbdf
+ #include "pci_regs.h" // PCI_ROM_ADDRESS
+ #include "pci_ids.h" // PCI_CLASS_DISPLAY_VGA
+ #include "boot.h" // IPL
+@@ -398,7 +398,7 @@ optionrom_setup(void)
+     } else {
+         // Find and deploy PCI roms.
+         int bdf, max;
+-        foreachpci(bdf, max) {
++        foreachbdf(bdf, max) {
+             u16 v = pci_config_readw(bdf, PCI_CLASS_DEVICE);
+             if (v == 0x0000 || v == 0xffff || v == PCI_CLASS_DISPLAY_VGA
+                 || (CONFIG_ATA && v == PCI_CLASS_STORAGE_IDE))
+diff --git a/src/pci.c b/src/pci.c
+index 944a393..c95baca 100644
+--- a/src/pci.c
++++ b/src/pci.c
+@@ -57,7 +57,7 @@ pci_config_maskw(u16 bdf, u32 addr, u16 off, u16 on)
+     pci_config_writew(bdf, addr, val);
+ }
+ 
+-// Helper function for foreachpci() macro - return next device
++// Helper function for foreachbdf() macro - return next device
+ int
+ pci_next(int bdf, int *pmax)
+ {
+@@ -164,7 +164,7 @@ pci_find_device(u16 vendid, u16 devid)
+ {
+     u32 id = (devid << 16) | vendid;
+     int bdf, max;
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+         u32 v = pci_config_readl(bdf, PCI_VENDOR_ID);
+         if (v == id)
+             return bdf;
+@@ -177,7 +177,7 @@ int
+ pci_find_class(u16 classid)
+ {
+     int bdf, max;
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+         u16 v = pci_config_readw(bdf, PCI_CLASS_DEVICE);
+         if (v == classid)
+             return bdf;
+@@ -198,7 +198,7 @@ pci_path_setup(void)
+ 
+     int roots = 0;
+     int bdf, max;
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+         int bus = pci_bdf_to_bus(bdf);
+         if (! PCIpaths[bus])
+             PCIpaths[bus] = (roots++) | PP_ROOT;
+@@ -239,7 +239,7 @@ int pci_find_init_device(const struct pci_device_id *ids, void *arg)
+ {
+     int bdf, max;
+ 
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+         if (pci_init_device(ids, bdf, arg) == 0) {
+             return bdf;
+         }
+diff --git a/src/pci.h b/src/pci.h
+index 9869a26..6e9cbf0 100644
+--- a/src/pci.h
++++ b/src/pci.h
+@@ -53,12 +53,12 @@ extern int *PCIpaths;
+ void pci_path_setup(void);
+ 
+ int pci_next(int bdf, int *pmax);
+-#define foreachpci(BDF, MAX)                    \
++#define foreachbdf(BDF, MAX)                    \
+     for (MAX=0x0100, BDF=pci_next(0, &MAX)      \
+          ; BDF >= 0                             \
+          ; BDF=pci_next(BDF+1, &MAX))
+ 
+-#define foreachpci_in_bus(BDF, MAX, BUS)                                \
++#define foreachbdf_in_bus(BDF, MAX, BUS)                                \
+     for (MAX = pci_bus_devfn_to_bdf(BUS, 0) + 0x0100,                   \
+          BDF = pci_next(pci_bus_devfn_to_bdf(BUS, 0), &MAX)             \
+          ; BDF >= 0 && BDF < pci_bus_devfn_to_bdf(BUS, 0) + 0x0100      \
+diff --git a/src/pcibios.c b/src/pcibios.c
+index a23248b..4fdfd5e 100644
+--- a/src/pcibios.c
++++ b/src/pcibios.c
+@@ -27,7 +27,7 @@ handle_1ab101(struct bregs *regs)
+ {
+     // Find max bus.
+     int bdf, max;
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+     }
+ 
+     regs->al = 0x01; // Flags - "Config Mechanism #1" supported.
+@@ -45,7 +45,7 @@ handle_1ab102(struct bregs *regs)
+     u32 id = (regs->cx << 16) | regs->dx;
+     int count = regs->si;
+     int bdf, max;
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+         u32 v = pci_config_readl(bdf, PCI_VENDOR_ID);
+         if (v != id)
+             continue;
+@@ -65,7 +65,7 @@ handle_1ab103(struct bregs *regs)
+     int count = regs->si;
+     u32 classprog = regs->ecx;
+     int bdf, max;
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+         u32 v = pci_config_readl(bdf, PCI_CLASS_REVISION);
+         if ((v>>8) != classprog)
+             continue;
+diff --git a/src/pciinit.c b/src/pciinit.c
+index ca0d182..6bd8390 100644
+--- a/src/pciinit.c
++++ b/src/pciinit.c
+@@ -360,7 +360,7 @@ static void pci_bios_init_device(u16 bdf)
+ static void pci_bios_init_device_in_bus(int bus)
+ {
+     int bdf, max;
+-    foreachpci_in_bus(bdf, max, bus) {
++    foreachbdf_in_bus(bdf, max, bus) {
+         pci_bios_init_device(bdf);
+     }
+ }
+@@ -374,7 +374,7 @@ pci_bios_init_bus_rec(int bus, u8 *pci_bus)
+     dprintf(1, "PCI: %s bus = 0x%x\n", __func__, bus);
+ 
+     /* prevent accidental access to unintended devices */
+-    foreachpci_in_bus(bdf, max, bus) {
++    foreachbdf_in_bus(bdf, max, bus) {
+         class = pci_config_readw(bdf, PCI_CLASS_DEVICE);
+         if (class == PCI_CLASS_BRIDGE_PCI) {
+             pci_config_writeb(bdf, PCI_SECONDARY_BUS, 255);
+@@ -382,7 +382,7 @@ pci_bios_init_bus_rec(int bus, u8 *pci_bus)
+         }
+     }
+ 
+-    foreachpci_in_bus(bdf, max, bus) {
++    foreachbdf_in_bus(bdf, max, bus) {
+         class = pci_config_readw(bdf, PCI_CLASS_DEVICE);
+         if (class != PCI_CLASS_BRIDGE_PCI) {
+             continue;
+@@ -451,7 +451,7 @@ pci_setup(void)
+     pci_bios_init_bus();
+ 
+     int bdf, max;
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+         pci_init_device(pci_isa_bridge_tbl, bdf, NULL);
+     }
+     pci_bios_init_device_in_bus(0 /* host bus */);
+diff --git a/src/usb.c b/src/usb.c
+index a07bc1f..454e2d4 100644
+--- a/src/usb.c
++++ b/src/usb.c
+@@ -5,7 +5,7 @@
+ // This file may be distributed under the terms of the GNU LGPLv3 license.
+ 
+ #include "util.h" // dprintf
+-#include "pci.h" // foreachpci
++#include "pci.h" // foreachbdf
+ #include "config.h" // CONFIG_*
+ #include "pci_regs.h" // PCI_CLASS_REVISION
+ #include "pci_ids.h" // PCI_CLASS_SERIAL_USB_UHCI
+@@ -431,7 +431,7 @@ usb_setup(void)
+     int ehcibdf = -1;
+     int count = 0;
+     int bdf, max;
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+         u32 code = pci_config_readl(bdf, PCI_CLASS_REVISION) >> 8;
+ 
+         if (code >> 8 != PCI_CLASS_SERIAL_USB)
+diff --git a/src/virtio-blk.c b/src/virtio-blk.c
+index bd9e2ad..ad80c24 100644
+--- a/src/virtio-blk.c
++++ b/src/virtio-blk.c
+@@ -8,7 +8,7 @@
+ // This file may be distributed under the terms of the GNU LGPLv3 license.
+ 
+ #include "util.h" // dprintf
+-#include "pci.h" // foreachpci
++#include "pci.h" // foreachbdf
+ #include "config.h" // CONFIG_*
+ #include "biosvar.h" // GET_GLOBAL
+ #include "pci_ids.h" // PCI_DEVICE_ID_VIRTIO_BLK
+@@ -175,7 +175,7 @@ virtio_blk_setup(void)
+ 
+     int bdf, max;
+     u32 id = PCI_VENDOR_ID_REDHAT_QUMRANET | (PCI_DEVICE_ID_VIRTIO_BLK << 16);
+-    foreachpci(bdf, max) {
++    foreachbdf(bdf, max) {
+         u32 v = pci_config_readl(bdf, PCI_VENDOR_ID);
+         if (v != id)
+             continue;
+-- 
+1.7.5.4
+

@@ -1,0 +1,48 @@
+From 263ea2f20507d7d30f6bfd80a8dc6fa16976d784 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 4 Aug 2011 19:36:29 +0200
+Subject: [PATCH 87/91] ahci: ignore atapi devices which are not cdroms
+
+Also simplify the code a bit further down the road
+as we know iscd must be true ;)
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+---
+ src/ahci.c |   15 ++++++++-------
+ 1 files changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/src/ahci.c b/src/ahci.c
+index 55ada5f..c1b436d 100644
+--- a/src/ahci.c
++++ b/src/ahci.c
+@@ -547,19 +547,20 @@ static int ahci_port_init(struct ahci_port_s *port)
+         port->drive.blksize = CDROM_SECTOR_SIZE;
+         port->drive.sectors = (u64)-1;
+         u8 iscd = ((buffer[0] >> 8) & 0x1f) == 0x05;
++        if (!iscd) {
++            dprintf(1, "AHCI/%d: atapi device is'nt a cdrom\n", port->pnr);
++            return -1;
++        }
+         char *desc = znprintf(MAXDESCSIZE
+-                              , "DVD/CD [AHCI/%d: %s ATAPI-%d %s]"
++                              , "DVD/CD [AHCI/%d: %s ATAPI-%d DVD/CD]"
+                               , port->pnr
+                               , ata_extract_model(model, MAXMODEL, buffer)
+-                              , ata_extract_version(buffer)
+-                              , (iscd ? "DVD/CD" : "Device"));
++                              , ata_extract_version(buffer));
+         dprintf(1, "%s\n", desc);
+ 
+         // fill cdidmap
+-        if (iscd) {
+-            int prio = bootprio_find_ata_device(ctrl->pci_tmp, pnr, 0);
+-            boot_add_cd(&port->drive, desc, prio);
+-        }
++        int prio = bootprio_find_ata_device(ctrl->pci_tmp, pnr, 0);
++        boot_add_cd(&port->drive, desc, prio);
+     }
+     return 0;
+ }
+-- 
+1.7.5.4
+

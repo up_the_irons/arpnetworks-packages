@@ -1,0 +1,61 @@
+From 76b5e7146bac15ad5357ca9e46bd8f6fd7ace3c2 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Tue, 21 Jun 2011 22:52:51 -0400
+Subject: [PATCH 35/91] Use 'struct pci_device' to note which devices have
+ native drivers.
+
+Remove the check in optionroms.c for CONFIG_ATA and
+PCI_CLASS_STORAGE_IDE with a flag in 'struct pci_device'.  This
+ensures devices using the ATA driver that aren't in
+PCI_CLASS_STORAGE_IDE don't have their optionroms executed.  It also
+allows other drivers to disable option rom execution in the future.
+---
+ src/ata.c        |    1 +
+ src/optionroms.c |    4 +---
+ src/pci.h        |    3 +++
+ 3 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/src/ata.c b/src/ata.c
+index a6b5067..79bc76f 100644
+--- a/src/ata.c
++++ b/src/ata.c
+@@ -967,6 +967,7 @@ init_controller(int bdf, int irq, u32 port1, u32 port2, u32 master)
+ static void
+ init_pciata(struct pci_device *pci, u8 prog_if)
+ {
++    pci->have_driver = 1;
+     u16 bdf = pci->bdf;
+     u8 pciirq = pci_config_readb(bdf, PCI_INTERRUPT_LINE);
+     int master = 0;
+diff --git a/src/optionroms.c b/src/optionroms.c
+index b2415cc..27c172f 100644
+--- a/src/optionroms.c
++++ b/src/optionroms.c
+@@ -410,9 +410,7 @@ optionrom_setup(void)
+         // Find and deploy PCI roms.
+         struct pci_device *pci;
+         foreachpci(pci) {
+-            u16 v = pci->class;
+-            if (v == 0x0000 || v == 0xffff || v == PCI_CLASS_DISPLAY_VGA
+-                || (CONFIG_ATA && v == PCI_CLASS_STORAGE_IDE))
++            if (pci->class == PCI_CLASS_DISPLAY_VGA || pci->have_driver)
+                 continue;
+             init_pcirom(pci, 0, sources);
+         }
+diff --git a/src/pci.h b/src/pci.h
+index f1e3988..a21a1fd 100644
+--- a/src/pci.h
++++ b/src/pci.h
+@@ -48,6 +48,9 @@ struct pci_device {
+     u8 prog_if, revision;
+     u8 header_type;
+     u8 secondary_bus;
++
++    // Local information on device.
++    int have_driver;
+ };
+ extern struct pci_device *PCIDevices;
+ extern int MaxPCIBus;
+-- 
+1.7.5.4
+

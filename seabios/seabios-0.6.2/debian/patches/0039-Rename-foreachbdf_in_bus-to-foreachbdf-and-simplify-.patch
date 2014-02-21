@@ -1,0 +1,215 @@
+From 2b333e4bef018de86f010b25829742d1dcd60a0d Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sat, 2 Jul 2011 14:49:41 -0400
+Subject: [PATCH 39/91] Rename foreachbdf_in_bus to foreachbdf and simplify
+ it.
+
+Now that all callers of foreachbdf have been converted to
+foreachbdf_in_bus, simplify the pci_next() code - it no longer needs
+to track PCI bridges.
+
+Also, rename the remaining users of foreachbdf_in_bus to foreachbdf.
+---
+ src/pci.c      |   40 +++++++++++-----------------------------
+ src/pci.h      |   17 +++++------------
+ src/pcibios.c  |    8 ++++----
+ src/pciinit.c  |    6 +++---
+ src/shadow.c   |    4 ++--
+ src/usb-ehci.c |    3 +--
+ 6 files changed, 26 insertions(+), 52 deletions(-)
+
+diff --git a/src/pci.c b/src/pci.c
+index ebc6f91..0de8ec5 100644
+--- a/src/pci.c
++++ b/src/pci.c
+@@ -59,48 +59,30 @@ pci_config_maskw(u16 bdf, u32 addr, u16 off, u16 on)
+ 
+ // Helper function for foreachbdf() macro - return next device
+ int
+-pci_next(int bdf, int *pmax)
++pci_next(int bdf, int bus)
+ {
+-    if (pci_bdf_to_fn(bdf) == 1
+-        && (pci_config_readb(bdf-1, PCI_HEADER_TYPE) & 0x80) == 0)
++    if (pci_bdf_to_fn(bdf) == 0
++        && (pci_config_readb(bdf, PCI_HEADER_TYPE) & 0x80) == 0)
+         // Last found device wasn't a multi-function device - skip to
+         // the next device.
+-        bdf += 7;
++        bdf += 8;
++    else
++        bdf += 1;
+ 
+-    int max = *pmax;
+     for (;;) {
+-        if (bdf >= max) {
+-            if (CONFIG_PCI_ROOT1 && bdf <= (CONFIG_PCI_ROOT1 << 8))
+-                bdf = CONFIG_PCI_ROOT1 << 8;
+-            else if (CONFIG_PCI_ROOT2 && bdf <= (CONFIG_PCI_ROOT2 << 8))
+-                bdf = CONFIG_PCI_ROOT2 << 8;
+-            else
+-            	return -1;
+-            *pmax = max = bdf + 0x0100;
+-        }
++        if (pci_bdf_to_bus(bdf) != bus)
++            return -1;
+ 
+         u16 v = pci_config_readw(bdf, PCI_VENDOR_ID);
+         if (v != 0x0000 && v != 0xffff)
+             // Device is present.
+-            break;
++            return bdf;
+ 
+         if (pci_bdf_to_fn(bdf) == 0)
+             bdf += 8;
+         else
+             bdf += 1;
+     }
+-
+-    // Check if found device is a bridge.
+-    u32 v = pci_config_readb(bdf, PCI_HEADER_TYPE);
+-    v &= 0x7f;
+-    if (v == PCI_HEADER_TYPE_BRIDGE || v == PCI_HEADER_TYPE_CARDBUS) {
+-        v = pci_config_readl(bdf, PCI_PRIMARY_BUS);
+-        int newmax = (v & 0xff00) + 0x0100;
+-        if (newmax > max)
+-            *pmax = newmax;
+-    }
+-
+-    return bdf;
+ }
+ 
+ struct pci_device *PCIDevices;
+@@ -122,8 +104,8 @@ pci_probe(void)
+     int bus = -1, lastbus = 0, rootbuses = 0, count=0;
+     while (bus < MaxPCIBus) {
+         bus++;
+-        int bdf, max;
+-        foreachbdf_in_bus(bdf, max, bus) {
++        int bdf;
++        foreachbdf(bdf, bus) {
+             // Create new pci_device struct and add to list.
+             struct pci_device *dev = malloc_tmp(sizeof(*dev));
+             if (!dev) {
+diff --git a/src/pci.h b/src/pci.h
+index cde72dc..c34e348 100644
+--- a/src/pci.h
++++ b/src/pci.h
+@@ -62,18 +62,11 @@ static inline u32 pci_classprog(struct pci_device *pci) {
+ #define foreachpci(PCI)                         \
+     for (PCI=PCIDevices; PCI; PCI=PCI->next)
+ 
+-int pci_next(int bdf, int *pmax);
+-#define foreachbdf(BDF, MAX)                    \
+-    for (MAX=0x0100, BDF=pci_next(0, &MAX)      \
+-         ; BDF >= 0                             \
+-         ; BDF=pci_next(BDF+1, &MAX))
+-
+-#define foreachbdf_in_bus(BDF, MAX, BUS)                                \
+-    for (MAX = pci_bus_devfn_to_bdf(BUS, 0) + 0x0100,                   \
+-         BDF = pci_next(pci_bus_devfn_to_bdf(BUS, 0), &MAX)             \
+-         ; BDF >= 0 && BDF < pci_bus_devfn_to_bdf(BUS, 0) + 0x0100      \
+-         ; MAX = pci_bus_devfn_to_bdf(BUS, 0) + 0x0100,                 \
+-           BDF = pci_next(BDF + 1, &MAX))
++int pci_next(int bdf, int bus);
++#define foreachbdf(BDF, BUS)                                    \
++    for (BDF=pci_next(pci_bus_devfn_to_bdf((BUS), 0)-1, (BUS))  \
++         ; BDF >= 0                                             \
++         ; BDF=pci_next(BDF, (BUS)))
+ 
+ #define PCI_ANY_ID      (~0)
+ struct pci_device_id {
+diff --git a/src/pcibios.c b/src/pcibios.c
+index ca91c15..31ca37e 100644
+--- a/src/pcibios.c
++++ b/src/pcibios.c
+@@ -42,8 +42,8 @@ handle_1ab102(struct bregs *regs)
+     int bus = -1;
+     while (bus < GET_GLOBAL(MaxPCIBus)) {
+         bus++;
+-        int bdf, max;
+-        foreachbdf_in_bus(bdf, max, bus) {
++        int bdf;
++        foreachbdf(bdf, bus) {
+             u32 v = pci_config_readl(bdf, PCI_VENDOR_ID);
+             if (v != id)
+                 continue;
+@@ -66,8 +66,8 @@ handle_1ab103(struct bregs *regs)
+     int bus = -1;
+     while (bus < GET_GLOBAL(MaxPCIBus)) {
+         bus++;
+-        int bdf, max;
+-        foreachbdf_in_bus(bdf, max, bus) {
++        int bdf;
++        foreachbdf(bdf, bus) {
+             u32 v = pci_config_readl(bdf, PCI_CLASS_REVISION);
+             if ((v>>8) != classprog)
+                 continue;
+diff --git a/src/pciinit.c b/src/pciinit.c
+index bfff3db..57747c0 100644
+--- a/src/pciinit.c
++++ b/src/pciinit.c
+@@ -377,13 +377,13 @@ static void pci_bios_init_device_in_bus(int bus)
+ static void
+ pci_bios_init_bus_rec(int bus, u8 *pci_bus)
+ {
+-    int bdf, max;
++    int bdf;
+     u16 class;
+ 
+     dprintf(1, "PCI: %s bus = 0x%x\n", __func__, bus);
+ 
+     /* prevent accidental access to unintended devices */
+-    foreachbdf_in_bus(bdf, max, bus) {
++    foreachbdf(bdf, bus) {
+         class = pci_config_readw(bdf, PCI_CLASS_DEVICE);
+         if (class == PCI_CLASS_BRIDGE_PCI) {
+             pci_config_writeb(bdf, PCI_SECONDARY_BUS, 255);
+@@ -391,7 +391,7 @@ pci_bios_init_bus_rec(int bus, u8 *pci_bus)
+         }
+     }
+ 
+-    foreachbdf_in_bus(bdf, max, bus) {
++    foreachbdf(bdf, bus) {
+         class = pci_config_readw(bdf, PCI_CLASS_DEVICE);
+         if (class != PCI_CLASS_BRIDGE_PCI) {
+             continue;
+diff --git a/src/shadow.c b/src/shadow.c
+index ece7d97..c0c8cc2 100644
+--- a/src/shadow.c
++++ b/src/shadow.c
+@@ -117,8 +117,8 @@ make_bios_writable(void)
+ 
+     // At this point, statically allocated variables can't be written,
+     // so do this search manually.
+-    int bdf, max;
+-    foreachbdf_in_bus(bdf, max, 0) {
++    int bdf;
++    foreachbdf(bdf, 0) {
+         u32 vendev = pci_config_readl(bdf, PCI_VENDOR_ID);
+         u16 vendor = vendev & 0xffff, device = vendev >> 16;
+         if (vendor == PCI_VENDOR_ID_INTEL
+diff --git a/src/usb-ehci.c b/src/usb-ehci.c
+index f11924a..5a0eb3e 100644
+--- a/src/usb-ehci.c
++++ b/src/usb-ehci.c
+@@ -280,7 +280,6 @@ ehci_init(u16 bdf, int busid, int compbdf)
+ 
+     // Find companion controllers.
+     int count = 0;
+-    int max = pci_to_bdf(pci_bdf_to_bus(bdf) + 1, 0, 0);
+     for (;;) {
+         if (compbdf < 0 || compbdf >= bdf)
+             break;
+@@ -294,7 +293,7 @@ ehci_init(u16 bdf, int busid, int compbdf)
+             cntl->companion[count].type = USB_TYPE_OHCI;
+             count++;
+         }
+-        compbdf = pci_next(compbdf+1, &max);
++        compbdf = pci_next(compbdf+1, pci_bdf_to_bus(compbdf));
+     }
+ 
+     run_thread(configure_ehci, cntl);
+-- 
+1.7.5.4
+

@@ -1,0 +1,43 @@
+From 5d74ce0f164f75f63b8a4501f396bb4337b09b00 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Mon, 20 Jun 2011 22:22:08 -0400
+Subject: [PATCH 28/91] Convert virtio detection to use struct pci_device.
+
+---
+ src/virtio-blk.c |   13 ++++++-------
+ 1 files changed, 6 insertions(+), 7 deletions(-)
+
+diff --git a/src/virtio-blk.c b/src/virtio-blk.c
+index ad80c24..4e3ef06 100644
+--- a/src/virtio-blk.c
++++ b/src/virtio-blk.c
+@@ -8,7 +8,7 @@
+ // This file may be distributed under the terms of the GNU LGPLv3 license.
+ 
+ #include "util.h" // dprintf
+-#include "pci.h" // foreachbdf
++#include "pci.h" // foreachpci
+ #include "config.h" // CONFIG_*
+ #include "biosvar.h" // GET_GLOBAL
+ #include "pci_ids.h" // PCI_DEVICE_ID_VIRTIO_BLK
+@@ -173,12 +173,11 @@ virtio_blk_setup(void)
+ 
+     dprintf(3, "init virtio-blk\n");
+ 
+-    int bdf, max;
+-    u32 id = PCI_VENDOR_ID_REDHAT_QUMRANET | (PCI_DEVICE_ID_VIRTIO_BLK << 16);
+-    foreachbdf(bdf, max) {
+-        u32 v = pci_config_readl(bdf, PCI_VENDOR_ID);
+-        if (v != id)
++    struct pci_device *pci;
++    foreachpci(pci) {
++        if (pci->vendor != PCI_VENDOR_ID_REDHAT_QUMRANET
++            || pci->device != PCI_DEVICE_ID_VIRTIO_BLK)
+             continue;
+-        init_virtio_blk(bdf);
++        init_virtio_blk(pci->bdf);
+     }
+ }
+-- 
+1.7.5.4
+

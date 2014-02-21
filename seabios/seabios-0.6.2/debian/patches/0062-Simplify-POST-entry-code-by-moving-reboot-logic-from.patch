@@ -1,0 +1,448 @@
+From 87b533bf71bb41e32319db0ed8f167f50171afc5 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sun, 10 Jul 2011 22:35:07 -0400
+Subject: [PATCH 62/91] Simplify POST entry code by moving reboot logic from
+ post.c to resume.c.
+
+Detect a resume/reboot by inspecting HaveRunPost instead of inspecting
+the cmos reset code.  Inspecting a global variable is both simpler and
+safer.
+
+Move the reboot logic from post.c to resume.c - this makes the code in
+post.c simpler as it is now only called once on machine startup.  This
+also makes it easier to ensure all POST initialization code resides in
+the relocatable "init" sections.
+
+Also, rename _start() to handle_post() so that it is more in keeping
+with the entry_xxx() and handle_xxx() function naming.
+
+Signed-off-by: Kevin O'Connor <kevin@koconnor.net>
+---
+ src/post.c      |   74 +++++++++---------------------------
+ src/resume.c    |  111 ++++++++++++++++++++++++++++++++++++-------------------
+ src/romlayout.S |   59 +++++------------------------
+ src/stacks.c    |    5 --
+ src/util.h      |   10 +++++
+ 5 files changed, 113 insertions(+), 146 deletions(-)
+
+diff --git a/src/post.c b/src/post.c
+index 813ff20..d98941c 100644
+--- a/src/post.c
++++ b/src/post.c
+@@ -277,7 +277,7 @@ maininit(void)
+ 
+ 
+ /****************************************************************
+- * Code relocation
++ * POST entry and code relocation
+  ****************************************************************/
+ 
+ // Update given relocs for the code at 'dest' with a given 'delta'
+@@ -289,8 +289,7 @@ updateRelocs(void *dest, u32 *rstart, u32 *rend, u32 delta)
+         *((u32*)(dest + *reloc)) += delta;
+ }
+ 
+-// Start of Power On Self Test - the BIOS initilization.  This
+-// function sets up for and attempts relocation of the init code.
++// Relocate init code and then call maininit() at new address.
+ static void
+ reloc_init(void)
+ {
+@@ -329,63 +328,23 @@ reloc_init(void)
+ }
+ 
+ // Start of Power On Self Test (POST) - the BIOS initilization phase.
+-// This function sets up for and attempts relocation of the init code.
++// This function does the setup needed for code relocation, and then
++// invokes the relocation and main setup code.
+ void VISIBLE32INIT
+-post(void)
++handle_post(void)
+ {
+-    // Detect ram and setup internal malloc.
+-    qemu_cfg_port_probe();
+-    ram_probe();
+-    malloc_setup();
+-
+-    reloc_init();
+-}
+-
+-
+-/****************************************************************
+- * POST entry point
+- ****************************************************************/
+-
+-static int HaveRunPost;
+-
+-// Attempt to invoke a hard-reboot.
+-static void
+-tryReboot(void)
+-{
+-    dprintf(1, "Attempting a hard reboot\n");
+-
+-    // Setup for reset on qemu.
+-    if (! CONFIG_COREBOOT) {
+-        qemu_prep_reset();
+-        if (HaveRunPost)
+-            apm_shutdown();
+-    }
+-
+-    // Try keyboard controller reboot.
+-    i8042_reboot();
+-
+-    // Try PCI 0xcf9 reboot
+-    pci_reboot();
++    debug_serial_setup();
++    dprintf(1, "Start bios (version %s)\n", VERSION);
+ 
+-    // Try triple fault
+-    asm volatile("int3");
++    // Enable CPU caching
++    setcr0(getcr0() & ~(CR0_CD|CR0_NW));
+ 
+-    panic("Could not reboot");
+-}
++    // Clear CMOS reboot flag.
++    outb_cmos(0, CMOS_RESET_CODE);
+ 
+-// 32-bit entry point.
+-void VISIBLE32FLAT
+-_start(void)
+-{
++    // Make sure legacy DMA isn't running.
+     init_dma();
+ 
+-    debug_serial_setup();
+-    dprintf(1, "Start bios (version %s)\n", VERSION);
+-
+-    if (HaveRunPost)
+-        // This is a soft reboot - invoke a hard reboot.
+-        tryReboot();
+-
+     // Check if we are running under Xen.
+     xen_probe();
+ 
+@@ -393,6 +352,11 @@ _start(void)
+     make_bios_writable();
+     HaveRunPost = 1;
+ 
+-    // Perform main setup code.
+-    post();
++    // Detect ram and setup internal malloc.
++    qemu_cfg_port_probe();
++    ram_probe();
++    malloc_setup();
++
++    // Relocate initialization code and call maininit().
++    reloc_init();
+ }
+diff --git a/src/resume.c b/src/resume.c
+index 20e2e3d..4390fb5 100644
+--- a/src/resume.c
++++ b/src/resume.c
+@@ -10,6 +10,12 @@
+ #include "biosvar.h" // struct bios_data_area_s
+ #include "bregs.h" // struct bregs
+ #include "acpi.h" // find_resume_vector
++#include "ps2port.h" // i8042_reboot
++#include "pci.h" // pci_reboot
++#include "cmos.h" // inb_cmos
++
++// Indicator if POST phase has been run.
++int HaveRunPost VAR16VISIBLE;
+ 
+ // Reset DMA controller
+ void
+@@ -26,34 +32,19 @@ init_dma(void)
+ 
+ // Handler for post calls that look like a resume.
+ void VISIBLE16
+-handle_resume(u8 status)
++handle_resume(void)
+ {
+-    init_dma();
+-
+     debug_serial_setup();
++    int status = inb_cmos(CMOS_RESET_CODE);
++    outb_cmos(0, CMOS_RESET_CODE);
+     dprintf(1, "In resume (status=%d)\n", status);
+ 
++    init_dma();
++
+     switch (status) {
+-    case 0xfe:
+-        if (CONFIG_S3_RESUME) {
+-            // S3 resume request.  Jump to 32bit mode to handle the resume.
+-            asm volatile(
+-                "movw %w1, %%ss\n"
+-                "movl %0, %%esp\n"
+-                "movl $_cfunc32flat_s3_resume, %%edx\n"
+-                "jmp transition32\n"
+-                : : "i"(BUILD_S3RESUME_STACK_ADDR), "r"(0)
+-                );
+-            break;
+-        }
+-        // NO BREAK
+-    case 0x00:
+-    case 0x0d ... 0xfd:
+-    case 0xff:
+-        // Normal post - now that status has been cleared a reset will
+-        // run regular boot code..
+-        reset_vector();
+-        break;
++    case 0x01 ... 0x04:
++    case 0x06 ... 0x09:
++        panic("Unimplemented shutdown status: %02x\n", status);
+ 
+     case 0x05:
+         // flush keyboard (issue EOI) and jump via 40h:0067h
+@@ -88,19 +79,33 @@ handle_resume(u8 status)
+             : : "m"(BDA_JUMP), "r"(SEG_BDA)
+             );
+         break;
++
++    default:
++        break;
+     }
+ 
+-    panic("Unimplemented shutdown status: %02x\n", status);
++    // Not a 16bit resume - do remaining checks in 32bit mode
++    asm volatile(
++        "movw %w1, %%ss\n"
++        "movl %0, %%esp\n"
++        "movl $_cfunc32flat_handle_resume32, %%edx\n"
++        "jmp transition32\n"
++        : : "i"(BUILD_S3RESUME_STACK_ADDR), "r"(0), "a"(status)
++        );
+ }
+ 
+-void VISIBLE32FLAT
++// Handle an S3 resume event
++static void
+ s3_resume(void)
+ {
+-    ASSERT32FLAT();
+     if (!CONFIG_S3_RESUME)
+-        panic("S3 resume support not compiled in.\n");
++        return;
+ 
+-    dprintf(1, "In 32bit resume\n");
++    u32 s3_resume_vector = find_resume_vector();
++    if (!s3_resume_vector) {
++        dprintf(1, "No resume vector set!\n");
++        return;
++    }
+ 
+     smm_init();
+ 
+@@ -108,18 +113,48 @@ s3_resume(void)
+ 
+     make_bios_readonly();
+ 
+-    u32 s3_resume_vector = find_resume_vector();
+-
+     // Invoke the resume vector.
+     struct bregs br;
+     memset(&br, 0, sizeof(br));
+-    if (s3_resume_vector) {
+-        dprintf(1, "Jump to resume vector (%x)\n", s3_resume_vector);
+-        br.code = FLATPTR_TO_SEGOFF((void*)s3_resume_vector);
+-    } else {
+-        dprintf(1, "No resume vector set!\n");
+-        // Jump to the post vector to restart with a normal boot.
+-        br.code = SEGOFF(SEG_BIOS, (u32)reset_vector - BUILD_BIOS_ADDR);
+-    }
++    dprintf(1, "Jump to resume vector (%x)\n", s3_resume_vector);
++    br.code = FLATPTR_TO_SEGOFF((void*)s3_resume_vector);
+     call16big(&br);
+ }
++
++// Attempt to invoke a hard-reboot.
++static void
++tryReboot(void)
++{
++    dprintf(1, "Attempting a hard reboot\n");
++
++    // Setup for reset on qemu.
++    if (! CONFIG_COREBOOT) {
++        qemu_prep_reset();
++        if (HaveRunPost)
++            apm_shutdown();
++    }
++
++    // Try keyboard controller reboot.
++    i8042_reboot();
++
++    // Try PCI 0xcf9 reboot
++    pci_reboot();
++
++    // Try triple fault
++    asm volatile("int3");
++
++    panic("Could not reboot");
++}
++
++void VISIBLE32FLAT
++handle_resume32(int status)
++{
++    ASSERT32FLAT();
++    dprintf(1, "In 32bit resume\n");
++
++    if (status == 0xfe)
++        s3_resume();
++
++    // Must be a soft reboot - invoke a hard reboot.
++    tryReboot();
++}
+diff --git a/src/romlayout.S b/src/romlayout.S
+index f540c1e..f5c36fc 100644
+--- a/src/romlayout.S
++++ b/src/romlayout.S
+@@ -230,64 +230,25 @@ __call16big_from32:
+ 
+ 
+ /****************************************************************
+- * POST entry point
++ * Misc. entry points.
+  ****************************************************************/
+ 
+-        DECLFUNC entry_post
+-entry_post:
+-        // Enable cache
+-        movl %cr0, %eax
+-        andl $~(CR0_CD|CR0_NW), %eax
+-        movl %eax, %cr0
+-
++// Resume (and reboot) entry point - called from entry_post
++        DECLFUNC entry_resume
++entry_resume:
+         // Disable interrupts
+         cli
+         cld
+-
+-        // Check for restart indicator.
+-        movl $CMOS_RESET_CODE|NMI_DISABLE_BIT, %eax
+-        outb %al, $PORT_CMOS_INDEX
+-        inb $PORT_CMOS_DATA, %al
+-        cmpb $0x0, %al
+-        jnz 1f
+-
+-        // Normal entry point
+-        ENTRY_INTO32 _cfunc32flat__start
+-
+-        // Entry point when a post call looks like a resume.
+-1:
+-        // Save old shutdown status.
+-        movl %eax, %ebx
+-
+-        // Clear shutdown status register.
+-        movl $CMOS_RESET_CODE|NMI_DISABLE_BIT, %eax
+-        outb %al, $PORT_CMOS_INDEX
+-        xorl %eax, %eax
+-        outb %al, $PORT_CMOS_DATA
+-
+         // Use a stack in EBDA
+         movw $SEG_BDA, %ax
+         movw %ax, %ds
+         movw BDA_ebda_seg, %ax
+-
+-        cmpw $EBDA_SEGMENT_START, %ax
+-        jle 2f
+-        // EBDA segment doesn't look valid - use startup value.
+-        movw $EBDA_SEGMENT_START, %ax
+-
+-2:      movw %ax, %ds
++        movw %ax, %ds
+         movw %ax, %ss
+         movl $EBDA_OFFSET_TOP_STACK, %esp
+-
+         // Call handler.
+-        movl %ebx, %eax
+         jmp handle_resume
+ 
+-
+-/****************************************************************
+- * Misc. entry points.
+- ****************************************************************/
+-
+ // PMM entry point
+         DECLFUNC entry_pmm
+ entry_pmm:
+@@ -418,7 +379,7 @@ post32:
+         movw %ax, %gs
+         movw %ax, %ss
+         movl $BUILD_STACK_ADDR, %esp
+-        ljmpl $SEG32_MODE32_CS, $_cfunc32flat__start
++        ljmpl $SEG32_MODE32_CS, $_cfunc32flat_handle_post
+ 
+         .code16gcc
+ 
+@@ -494,8 +455,10 @@ entry_18:
+         .endm
+ 
+         ORG 0xe05b
+-entry_post_official:
+-        jmp entry_post
++entry_post:
++        cmpl $0, %cs:HaveRunPost                // Check for resume/reboot
++        jnz entry_resume
++        ENTRY_INTO32 _cfunc32flat_handle_post   // Normal entry point
+ 
+         ORG 0xe2c3
+         IRQ_ENTRY 02
+@@ -578,7 +541,7 @@ entry_iret_official:
+         ORG 0xfff0 // Power-up Entry Point
+         .global reset_vector
+ reset_vector:
+-        ljmpw $SEG_BIOS, $entry_post_official
++        ljmpw $SEG_BIOS, $entry_post
+ 
+         // 0xfff5 - BiosDate in misc.c
+ 
+diff --git a/src/stacks.c b/src/stacks.c
+index 53bf669..17495d5 100644
+--- a/src/stacks.c
++++ b/src/stacks.c
+@@ -24,11 +24,6 @@ struct thread_info VAR32FLATVISIBLE MainThread = {
+  * Low level helpers
+  ****************************************************************/
+ 
+-static inline u32 getcr0(void) {
+-    u32 cr0;
+-    asm("movl %%cr0, %0" : "=r"(cr0));
+-    return cr0;
+-}
+ static inline void sgdt(struct descloc_s *desc) {
+     asm("sgdtl %0" : "=m"(*desc));
+ }
+diff --git a/src/util.h b/src/util.h
+index 303c524..4319f63 100644
+--- a/src/util.h
++++ b/src/util.h
+@@ -61,6 +61,15 @@ static inline void cpuid(u32 index, u32 *eax, u32 *ebx, u32 *ecx, u32 *edx)
+         : "0" (index));
+ }
+ 
++static inline u32 getcr0(void) {
++    u32 cr0;
++    asm("movl %%cr0, %0" : "=r"(cr0));
++    return cr0;
++}
++static inline void setcr0(u32 cr0) {
++    asm("movl %0, %%cr0" : : "r"(cr0));
++}
++
+ static inline u64 rdmsr(u32 index)
+ {
+     u64 ret;
+@@ -424,6 +433,7 @@ void enable_bootsplash(void);
+ void disable_bootsplash(void);
+ 
+ // resume.c
++extern int HaveRunPost;
+ void init_dma(void);
+ 
+ // pnpbios.c
+-- 
+1.7.5.4
+

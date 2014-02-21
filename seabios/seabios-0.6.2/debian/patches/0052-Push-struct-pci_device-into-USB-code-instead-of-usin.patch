@@ -1,0 +1,268 @@
+From 8ff8e01ad3ef59a2b15028d03f450c4fa209aaf1 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sat, 9 Jul 2011 14:11:21 -0400
+Subject: [PATCH 52/91] Push 'struct pci_device' into USB code (instead of
+ using u16 bdf).
+
+Signed-off-by: Kevin O'Connor <kevin@koconnor.net>
+---
+ src/usb-ehci.c |   44 +++++++++++++++++---------------------------
+ src/usb-ehci.h |    2 +-
+ src/usb-msc.c  |    5 +++--
+ src/usb-ohci.c |    5 +++--
+ src/usb-ohci.h |    2 +-
+ src/usb-uhci.c |    5 +++--
+ src/usb-uhci.h |    2 +-
+ src/usb.c      |    6 +++---
+ src/usb.h      |    2 +-
+ 9 files changed, 33 insertions(+), 40 deletions(-)
+
+diff --git a/src/usb-ehci.c b/src/usb-ehci.c
+index 5a0eb3e..d60465e 100644
+--- a/src/usb-ehci.c
++++ b/src/usb-ehci.c
+@@ -16,17 +16,12 @@
+ #include "usb-uhci.h" // init_uhci
+ #include "usb-ohci.h" // init_ohci
+ 
+-struct companion_s {
+-    u16 bdf;
+-    u16 type;
+-};
+-
+ struct usb_ehci_s {
+     struct usb_s usb;
+     struct ehci_caps *caps;
+     struct ehci_regs *regs;
+     struct ehci_qh *async_qh;
+-    struct companion_s companion[8];
++    struct pci_device *companion[8];
+     int checkports;
+     int legacycount;
+ };
+@@ -52,13 +47,13 @@ ehci_note_port(struct usb_ehci_s *cntl)
+     // Start companion controllers.
+     int i;
+     for (i=0; i<ARRAY_SIZE(cntl->companion); i++) {
+-        u16 type = cntl->companion[i].type;
+-        if (type == USB_TYPE_UHCI)
+-            uhci_init(cntl->companion[i].bdf, cntl->usb.busid + i);
+-        else if (type == USB_TYPE_OHCI)
+-            ohci_init(cntl->companion[i].bdf, cntl->usb.busid + i);
+-        else
+-            return;
++        struct pci_device *pci = cntl->companion[i];
++        if (!pci)
++            break;
++        if (pci_classprog(pci) == PCI_CLASS_SERIAL_USB_UHCI)
++            uhci_init(pci, cntl->usb.busid + i);
++        else if (pci_classprog(pci) == PCI_CLASS_SERIAL_USB_OHCI)
++            ohci_init(pci, cntl->usb.busid + i);
+     }
+ }
+ 
+@@ -249,11 +244,12 @@ fail:
+ }
+ 
+ int
+-ehci_init(u16 bdf, int busid, int compbdf)
++ehci_init(struct pci_device *pci, int busid, struct pci_device *comppci)
+ {
+     if (! CONFIG_USB_EHCI)
+         return -1;
+ 
++    u16 bdf = pci->bdf;
+     u32 baseaddr = pci_config_readl(bdf, PCI_BASE_ADDRESS_0);
+     struct ehci_caps *caps = (void*)(baseaddr & PCI_BASE_ADDRESS_MEM_MASK);
+     u32 hcc_params = readl(&caps->hccparams);
+@@ -265,7 +261,7 @@ ehci_init(u16 bdf, int busid, int compbdf)
+     struct usb_ehci_s *cntl = malloc_tmphigh(sizeof(*cntl));
+     memset(cntl, 0, sizeof(*cntl));
+     cntl->usb.busid = busid;
+-    cntl->usb.bdf = bdf;
++    cntl->usb.pci = pci;
+     cntl->usb.type = USB_TYPE_EHCI;
+     cntl->caps = caps;
+     cntl->regs = (void*)caps + readb(&caps->caplength);
+@@ -281,19 +277,13 @@ ehci_init(u16 bdf, int busid, int compbdf)
+     // Find companion controllers.
+     int count = 0;
+     for (;;) {
+-        if (compbdf < 0 || compbdf >= bdf)
++        if (!comppci || comppci == pci)
+             break;
+-        u32 code = pci_config_readl(compbdf, PCI_CLASS_REVISION) >> 8;
+-        if (code == PCI_CLASS_SERIAL_USB_UHCI) {
+-            cntl->companion[count].bdf = compbdf;
+-            cntl->companion[count].type = USB_TYPE_UHCI;
+-            count++;
+-        } else if (code == PCI_CLASS_SERIAL_USB_OHCI) {
+-            cntl->companion[count].bdf = compbdf;
+-            cntl->companion[count].type = USB_TYPE_OHCI;
+-            count++;
+-        }
+-        compbdf = pci_next(compbdf+1, pci_bdf_to_bus(compbdf));
++        if (pci_classprog(comppci) == PCI_CLASS_SERIAL_USB_UHCI)
++            cntl->companion[count++] = comppci;
++        else if (pci_classprog(comppci) == PCI_CLASS_SERIAL_USB_OHCI)
++            cntl->companion[count++] = comppci;
++        comppci = comppci->next;
+     }
+ 
+     run_thread(configure_ehci, cntl);
+diff --git a/src/usb-ehci.h b/src/usb-ehci.h
+index bb8df52..1a2c6c7 100644
+--- a/src/usb-ehci.h
++++ b/src/usb-ehci.h
+@@ -2,7 +2,7 @@
+ #define __USB_EHCI_H
+ 
+ // usb-ehci.c
+-int ehci_init(u16 bdf, int busid, int compbdf);
++int ehci_init(struct pci_device *pci, int busid, struct pci_device *comppci);
+ struct usb_pipe;
+ void ehci_free_pipe(struct usb_pipe *p);
+ struct usb_pipe *ehci_alloc_control_pipe(struct usb_pipe *dummy);
+diff --git a/src/usb-msc.c b/src/usb-msc.c
+index 1aa57d1..a57e4d2 100644
+--- a/src/usb-msc.c
++++ b/src/usb-msc.c
+@@ -12,6 +12,7 @@
+ #include "blockcmd.h" // cdb_read
+ #include "disk.h" // DTYPE_USB
+ #include "boot.h" // boot_add_hd
++#include "pci.h" // struct pci_device
+ 
+ struct usbdrive_s {
+     struct drive_s drive;
+@@ -145,7 +146,7 @@ setup_drive_cdrom(struct disk_op_s *op, char *desc)
+     op->drive_g->sectors = (u64)-1;
+     struct usb_pipe *pipe = container_of(
+         op->drive_g, struct usbdrive_s, drive)->bulkout;
+-    int prio = bootprio_find_usb(pipe->cntl->bdf, pipe->path);
++    int prio = bootprio_find_usb(pipe->cntl->pci->bdf, pipe->path);
+     boot_add_cd(op->drive_g, desc, prio);
+     return 0;
+ }
+@@ -173,7 +174,7 @@ setup_drive_hd(struct disk_op_s *op, char *desc)
+     // Register with bcv system.
+     struct usb_pipe *pipe = container_of(
+         op->drive_g, struct usbdrive_s, drive)->bulkout;
+-    int prio = bootprio_find_usb(pipe->cntl->bdf, pipe->path);
++    int prio = bootprio_find_usb(pipe->cntl->pci->bdf, pipe->path);
+     boot_add_hd(op->drive_g, desc, prio);
+ 
+     return 0;
+diff --git a/src/usb-ohci.c b/src/usb-ohci.c
+index 72b9f68..317f200 100644
+--- a/src/usb-ohci.c
++++ b/src/usb-ohci.c
+@@ -204,16 +204,17 @@ free:
+ }
+ 
+ void
+-ohci_init(u16 bdf, int busid)
++ohci_init(struct pci_device *pci, int busid)
+ {
+     if (! CONFIG_USB_OHCI)
+         return;
+     struct usb_ohci_s *cntl = malloc_tmphigh(sizeof(*cntl));
+     memset(cntl, 0, sizeof(*cntl));
+     cntl->usb.busid = busid;
+-    cntl->usb.bdf = bdf;
++    cntl->usb.pci = pci;
+     cntl->usb.type = USB_TYPE_OHCI;
+ 
++    u16 bdf = pci->bdf;
+     u32 baseaddr = pci_config_readl(bdf, PCI_BASE_ADDRESS_0);
+     cntl->regs = (void*)(baseaddr & PCI_BASE_ADDRESS_MEM_MASK);
+ 
+diff --git a/src/usb-ohci.h b/src/usb-ohci.h
+index 7dd2f09..c7670ff 100644
+--- a/src/usb-ohci.h
++++ b/src/usb-ohci.h
+@@ -2,7 +2,7 @@
+ #define __USB_OHCI_H
+ 
+ // usb-ohci.c
+-void ohci_init(u16 bdf, int busid);
++void ohci_init(struct pci_device *pci, int busid);
+ struct usb_pipe;
+ void ohci_free_pipe(struct usb_pipe *p);
+ struct usb_pipe *ohci_alloc_control_pipe(struct usb_pipe *dummy);
+diff --git a/src/usb-uhci.c b/src/usb-uhci.c
+index 40f83bb..6e45474 100644
+--- a/src/usb-uhci.c
++++ b/src/usb-uhci.c
+@@ -179,14 +179,15 @@ fail:
+ }
+ 
+ void
+-uhci_init(u16 bdf, int busid)
++uhci_init(struct pci_device *pci, int busid)
+ {
+     if (! CONFIG_USB_UHCI)
+         return;
++    u16 bdf = pci->bdf;
+     struct usb_uhci_s *cntl = malloc_tmphigh(sizeof(*cntl));
+     memset(cntl, 0, sizeof(*cntl));
+     cntl->usb.busid = busid;
+-    cntl->usb.bdf = bdf;
++    cntl->usb.pci = pci;
+     cntl->usb.type = USB_TYPE_UHCI;
+     cntl->iobase = (pci_config_readl(bdf, PCI_BASE_ADDRESS_4)
+                     & PCI_BASE_ADDRESS_IO_MASK);
+diff --git a/src/usb-uhci.h b/src/usb-uhci.h
+index 3c2c298..b5f70f7 100644
+--- a/src/usb-uhci.h
++++ b/src/usb-uhci.h
+@@ -2,7 +2,7 @@
+ #define __USB_UHCI_H
+ 
+ // usb-uhci.c
+-void uhci_init(u16 bdf, int busid);
++void uhci_init(struct pci_device *pci, int busid);
+ struct usb_pipe;
+ void uhci_free_pipe(struct usb_pipe *p);
+ struct usb_pipe *uhci_alloc_control_pipe(struct usb_pipe *dummy);
+diff --git a/src/usb.c b/src/usb.c
+index 26d1017..1f69d16 100644
+--- a/src/usb.c
++++ b/src/usb.c
+@@ -442,7 +442,7 @@ usb_setup(void)
+             for (;;) {
+                 if (pci_classprog(ehcipci) == PCI_CLASS_SERIAL_USB_EHCI) {
+                     // Found an ehci controller.
+-                    int ret = ehci_init(ehcipci->bdf, count++, pci->bdf);
++                    int ret = ehci_init(ehcipci, count++, pci);
+                     if (ret)
+                         // Error
+                         break;
+@@ -461,8 +461,8 @@ usb_setup(void)
+         }
+ 
+         if (pci_classprog(pci) == PCI_CLASS_SERIAL_USB_UHCI)
+-            uhci_init(pci->bdf, count++);
++            uhci_init(pci, count++);
+         else if (pci_classprog(pci) == PCI_CLASS_SERIAL_USB_OHCI)
+-            ohci_init(pci->bdf, count++);
++            ohci_init(pci, count++);
+     }
+ }
+diff --git a/src/usb.h b/src/usb.h
+index 966e94b..8b2af40 100644
+--- a/src/usb.h
++++ b/src/usb.h
+@@ -21,8 +21,8 @@ struct usb_pipe {
+ struct usb_s {
+     struct usb_pipe *defaultpipe;
+     struct mutex_s resetlock;
++    struct pci_device *pci;
+     int busid;
+-    u16 bdf;
+     u8 type;
+     u8 maxaddr;
+ };
+-- 
+1.7.5.4
+

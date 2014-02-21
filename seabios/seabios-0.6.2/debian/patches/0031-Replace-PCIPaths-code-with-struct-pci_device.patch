@@ -1,0 +1,177 @@
+From 659c99de95e69ad281ca361605d4bce72a090620 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Mon, 20 Jun 2011 23:29:15 -0400
+Subject: [PATCH 31/91] Replace PCIPaths code with struct pci_device.
+
+---
+ src/boot.c |   39 ++++++++++++++++++++++++---------------
+ src/pci.c  |   30 ------------------------------
+ src/pci.h  |    5 -----
+ src/post.c |    1 -
+ 4 files changed, 24 insertions(+), 51 deletions(-)
+
+diff --git a/src/boot.c b/src/boot.c
+index 9a67916..f3c165c 100644
+--- a/src/boot.c
++++ b/src/boot.c
+@@ -98,24 +98,33 @@ find_prio(const char *glob)
+ 
+ #define FW_PCI_DOMAIN "/pci@i0cf8"
+ 
++static struct pci_device *
++find_pci(u16 bdf)
++{
++    struct pci_device *pci;
++    foreachpci(pci) {
++        if (pci->bdf == bdf)
++            return pci;
++    }
++    return NULL;
++}
++
+ static char *
+-build_pci_path(char *buf, int max, const char *devname, int bdf)
++build_pci_path(char *buf, int max, const char *devname, struct pci_device *pci)
+ {
++    if (!pci)
++        return buf;
+     // Build the string path of a bdf - for example: /pci@i0cf8/isa@1,2
+     char *p = buf;
+-    int parent = pci_bdf_to_bus(bdf);
+-    if (PCIpaths)
+-        parent = PCIpaths[parent];
+-    int parentdev = parent & 0xffff;
+-    if (parent & PP_PCIBRIDGE) {
+-        p = build_pci_path(p, max, "pci-bridge", parentdev);
++    if (pci->parent) {
++        p = build_pci_path(p, max, "pci-bridge", pci->parent);
+     } else {
+-        if (parentdev)
+-            p += snprintf(p, max, "/pci-root@%x", parentdev);
++        if (pci->rootbus)
++            p += snprintf(p, max, "/pci-root@%x", pci->rootbus);
+         p += snprintf(p, buf+max-p, "%s", FW_PCI_DOMAIN);
+     }
+ 
+-    int dev = pci_bdf_to_dev(bdf), fn = pci_bdf_to_fn(bdf);
++    int dev = pci_bdf_to_dev(pci->bdf), fn = pci_bdf_to_fn(pci->bdf);
+     p += snprintf(p, buf+max-p, "/%s@%x", devname, dev);
+     if (fn)
+         p += snprintf(p, buf+max-p, ",%x", fn);
+@@ -128,7 +137,7 @@ int bootprio_find_pci_device(int bdf)
+         return -1;
+     // Find pci device - for example: /pci@i0cf8/ethernet@5
+     char desc[256];
+-    build_pci_path(desc, sizeof(desc), "*", bdf);
++    build_pci_path(desc, sizeof(desc), "*", find_pci(bdf));
+     return find_prio(desc);
+ }
+ 
+@@ -141,7 +150,7 @@ int bootprio_find_ata_device(int bdf, int chanid, int slave)
+         return -1;
+     // Find ata drive - for example: /pci@i0cf8/ide@1,1/drive@1/disk@0
+     char desc[256], *p;
+-    p = build_pci_path(desc, sizeof(desc), "*", bdf);
++    p = build_pci_path(desc, sizeof(desc), "*", find_pci(bdf));
+     snprintf(p, desc+sizeof(desc)-p, "/drive@%x/disk@%x", chanid, slave);
+     return find_prio(desc);
+ }
+@@ -155,7 +164,7 @@ int bootprio_find_fdc_device(int bdf, int port, int fdid)
+         return -1;
+     // Find floppy - for example: /pci@i0cf8/isa@1/fdc@03f1/floppy@0
+     char desc[256], *p;
+-    p = build_pci_path(desc, sizeof(desc), "isa", bdf);
++    p = build_pci_path(desc, sizeof(desc), "isa", find_pci(bdf));
+     snprintf(p, desc+sizeof(desc)-p, "/fdc@%04x/floppy@%x", port, fdid);
+     return find_prio(desc);
+ }
+@@ -166,7 +175,7 @@ int bootprio_find_pci_rom(int bdf, int instance)
+         return -1;
+     // Find pci rom - for example: /pci@i0cf8/scsi@3:rom2
+     char desc[256], *p;
+-    p = build_pci_path(desc, sizeof(desc), "*", bdf);
++    p = build_pci_path(desc, sizeof(desc), "*", find_pci(bdf));
+     if (instance)
+         snprintf(p, desc+sizeof(desc)-p, ":rom%d", instance);
+     return find_prio(desc);
+@@ -191,7 +200,7 @@ int bootprio_find_usb(int bdf, u64 path)
+     // Find usb - for example: /pci@i0cf8/usb@1,2/hub@1/network@0/ethernet@0
+     int i;
+     char desc[256], *p;
+-    p = build_pci_path(desc, sizeof(desc), "usb", bdf);
++    p = build_pci_path(desc, sizeof(desc), "usb", find_pci(bdf));
+     for (i=56; i>0; i-=8) {
+         int port = (path >> i) & 0xff;
+         if (port != 0xff)
+diff --git a/src/pci.c b/src/pci.c
+index 9a696b9..eaf434a 100644
+--- a/src/pci.c
++++ b/src/pci.c
+@@ -190,36 +190,6 @@ pci_find_class(u16 classid)
+     return -1;
+ }
+ 
+-int *PCIpaths;
+-
+-// Build the PCI path designations.
+-void
+-pci_path_setup(void)
+-{
+-    PCIpaths = malloc_tmp(sizeof(*PCIpaths) * 256);
+-    if (!PCIpaths)
+-        return;
+-    memset(PCIpaths, 0, sizeof(*PCIpaths) * 256);
+-
+-    int roots = 0;
+-    int bdf, max;
+-    foreachbdf(bdf, max) {
+-        int bus = pci_bdf_to_bus(bdf);
+-        if (! PCIpaths[bus])
+-            PCIpaths[bus] = (roots++) | PP_ROOT;
+-
+-        // Check if found device is a bridge.
+-        u32 v = pci_config_readb(bdf, PCI_HEADER_TYPE);
+-        v &= 0x7f;
+-        if (v == PCI_HEADER_TYPE_BRIDGE || v == PCI_HEADER_TYPE_CARDBUS) {
+-            v = pci_config_readl(bdf, PCI_PRIMARY_BUS);
+-            int childbus = (v >> 8) & 0xff;
+-            if (childbus > bus)
+-                PCIpaths[childbus] = bdf | PP_PCIBRIDGE;
+-        }
+-    }
+-}
+-
+ int pci_init_device(const struct pci_device_id *ids, u16 bdf, void *arg)
+ {
+     u16 vendor_id = pci_config_readw(bdf, PCI_VENDOR_ID);
+diff --git a/src/pci.h b/src/pci.h
+index 7aa2dfe..70339cd 100644
+--- a/src/pci.h
++++ b/src/pci.h
+@@ -59,11 +59,6 @@ static inline u32 pci_classprog(struct pci_device *pci) {
+ #define foreachpci(PCI)                         \
+     for (PCI=PCIDevices; PCI; PCI=PCI->next)
+ 
+-#define PP_ROOT      (1<<17)
+-#define PP_PCIBRIDGE (1<<18)
+-extern int *PCIpaths;
+-void pci_path_setup(void);
+-
+ int pci_next(int bdf, int *pmax);
+ #define foreachbdf(BDF, MAX)                    \
+     for (MAX=0x0100, BDF=pci_next(0, &MAX)      \
+diff --git a/src/post.c b/src/post.c
+index d8f4acf..7618b17 100644
+--- a/src/post.c
++++ b/src/post.c
+@@ -225,7 +225,6 @@ maininit(void)
+     // Initialize pci
+     pci_setup();
+     pci_probe();
+-    pci_path_setup();
+     smm_init();
+ 
+     // Initialize internal tables
+-- 
+1.7.5.4
+

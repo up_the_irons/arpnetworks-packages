@@ -1,0 +1,53 @@
+From 96f64f887dcaf86031c0be7c2a8e7245e8f452ef Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Mon, 20 Jun 2011 21:52:44 -0400
+Subject: [PATCH 24/91] Remove support for compiling in OPTIONROM_VENDEV_1/2.
+
+Passing in rom locations via absolute memory addresses hasn't been
+needed since coreboot adopted CBFS support (which as several years
+ago).
+---
+ src/config.h     |    7 -------
+ src/optionroms.c |    8 --------
+ 2 files changed, 0 insertions(+), 15 deletions(-)
+
+diff --git a/src/config.h b/src/config.h
+index 5b40488..e6e07c9 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -14,13 +14,6 @@
+ #define CONFIG_APPNAME6 "BOCHS "
+ #define CONFIG_APPNAME4 "BXPC"
+ 
+-// When option roms are not pre-deployed, SeaBIOS can copy an optionrom
+-// from flash for up to 2 devices.
+-#define OPTIONROM_VENDEV_1 0x00000000
+-#define OPTIONROM_MEM_1 0x00000000
+-#define OPTIONROM_VENDEV_2 0x00000000
+-#define OPTIONROM_MEM_2 0x00000000
+-
+ // Maximum number of map entries in the e820 map
+ #define CONFIG_MAX_E820 32
+ // Space to reserve in f-segment for dynamic allocations
+diff --git a/src/optionroms.c b/src/optionroms.c
+index ff74c4f..a612f3c 100644
+--- a/src/optionroms.c
++++ b/src/optionroms.c
+@@ -240,14 +240,6 @@ getRomPriority(u64 *sources, struct rom_header *rom, int instance)
+ static struct rom_header *
+ lookup_hardcode(u32 vendev)
+ {
+-    if (OPTIONROM_VENDEV_1
+-        && ((OPTIONROM_VENDEV_1 >> 16)
+-            | ((OPTIONROM_VENDEV_1 & 0xffff)) << 16) == vendev)
+-        return copy_rom((void*)OPTIONROM_MEM_1);
+-    if (OPTIONROM_VENDEV_2
+-        && ((OPTIONROM_VENDEV_2 >> 16)
+-            | ((OPTIONROM_VENDEV_2 & 0xffff)) << 16) == vendev)
+-        return copy_rom((void*)OPTIONROM_MEM_2);
+     char fname[17];
+     snprintf(fname, sizeof(fname), "pci%04x,%04x.rom"
+              , pci_vd_to_ven(vendev), pci_vd_to_dev(vendev));
+-- 
+1.7.5.4
+

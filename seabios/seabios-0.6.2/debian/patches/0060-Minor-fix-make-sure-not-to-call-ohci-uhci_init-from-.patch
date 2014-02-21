@@ -1,0 +1,34 @@
+From 6f500511dc00bece01a192a9a8be168ced065ccd Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sun, 10 Jul 2011 15:41:55 -0400
+Subject: [PATCH 60/91] Minor fix - make sure not to call ohci/uhci_init from
+ irq handler.
+
+When CONFIG_THREAD_OPTIONROMS is enabled, accessing the PCI config
+space from a thread could potentially race with an option rom.  Make
+sure the ohci/uhci_init() functions (which access PCI config space)
+are never run while an optionrom could also be running.
+
+Signed-off-by: Kevin O'Connor <kevin@koconnor.net>
+---
+ src/usb-ehci.c |    4 ++++
+ 1 files changed, 4 insertions(+), 0 deletions(-)
+
+diff --git a/src/usb-ehci.c b/src/usb-ehci.c
+index d60465e..5028c0d 100644
+--- a/src/usb-ehci.c
++++ b/src/usb-ehci.c
+@@ -50,6 +50,10 @@ ehci_note_port(struct usb_ehci_s *cntl)
+         struct pci_device *pci = cntl->companion[i];
+         if (!pci)
+             break;
++
++        // ohci/uhci_init call pci_config_XXX - don't run from irq handler.
++        wait_preempt();
++
+         if (pci_classprog(pci) == PCI_CLASS_SERIAL_USB_UHCI)
+             uhci_init(pci, cntl->usb.busid + i);
+         else if (pci_classprog(pci) == PCI_CLASS_SERIAL_USB_OHCI)
+-- 
+1.7.5.4
+

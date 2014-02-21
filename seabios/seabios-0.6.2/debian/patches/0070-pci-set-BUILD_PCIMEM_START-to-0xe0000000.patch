@@ -1,0 +1,28 @@
+From 77b8536e5c9908fbe99c88d01462a36a3deb05b1 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Mon, 11 Jul 2011 09:20:32 +0200
+Subject: [PATCH 70/91] pci: set BUILD_PCIMEM_START to 0xe0000000
+
+... and make it match with the declarations in acpi-dsdt.dsl.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+---
+ src/config.h |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/src/config.h b/src/config.h
+index 687cac6..f2fce89 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -40,7 +40,7 @@
+ #define BUILD_BIOS_TMP_ADDR       0x30000
+ #define BUILD_MAX_HIGHMEM         0xe0000000
+ 
+-#define BUILD_PCIMEM_START        0xf0000000
++#define BUILD_PCIMEM_START        0xe0000000
+ #define BUILD_PCIMEM_SIZE         (BUILD_PCIMEM_END - BUILD_PCIMEM_START)
+ #define BUILD_PCIMEM_END          0xfec00000    /* IOAPIC is mapped at */
+ 
+-- 
+1.7.5.4
+

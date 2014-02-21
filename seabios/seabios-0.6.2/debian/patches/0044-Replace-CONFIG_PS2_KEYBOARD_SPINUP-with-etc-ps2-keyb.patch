@@ -1,0 +1,62 @@
+From aafe4429f49c573305daf3a0bbbb59e1c7078061 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Tue, 5 Jul 2011 20:44:00 -0400
+Subject: [PATCH 44/91] Replace CONFIG_PS2_KEYBOARD_SPINUP with
+ "etc/ps2-keyboard-spinup" file.
+
+---
+ src/Kconfig   |    8 --------
+ src/ps2port.c |    6 ++++--
+ 2 files changed, 4 insertions(+), 10 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index e732528..7a4d50a 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -126,14 +126,6 @@ menu "Hardware support"
+         default y
+         help
+             Support PS2 ports (keyboard and mouse).
+-    config PS2_KEYBOARD_SPINUP
+-        depends on PS2PORT && COREBOOT
+-        int "Extra time (in ms) to allow a keyboard to initialize"
+-        default 0
+-        help
+-            Some PS2 keyboards don't respond to commands immediately
+-            after powering on.  Specify a positive value here to allow
+-            additional time for the keyboard to become responsive.
+ 
+     config USB
+         bool "USB"
+diff --git a/src/ps2port.c b/src/ps2port.c
+index 8259f65..58335af 100644
+--- a/src/ps2port.c
++++ b/src/ps2port.c
+@@ -7,6 +7,7 @@
+ 
+ #include "ioport.h" // inb
+ #include "util.h" // dprintf
++#include "paravirt.h" // romfile_loadint
+ #include "biosvar.h" // GET_EBDA
+ #include "ps2port.h" // ps2_kbd_command
+ #include "pic.h" // eoi_pic1
+@@ -438,13 +439,14 @@ keyboard_init(void *data)
+ 
+     /* ------------------- keyboard side ------------------------*/
+     /* reset keyboard and self test  (keyboard side) */
+-    u64 end = calc_future_tsc(CONFIG_PS2_KEYBOARD_SPINUP);
++    int spinupdelay = romfile_loadint("etc/ps2-keyboard-spinup", 0);
++    u64 end = calc_future_tsc(spinupdelay);
+     for (;;) {
+         ret = ps2_kbd_command(ATKBD_CMD_RESET_BAT, param);
+         if (!ret)
+             break;
+         if (check_tsc(end)) {
+-            if (CONFIG_PS2_KEYBOARD_SPINUP)
++            if (spinupdelay)
+                 warn_timeout();
+             return;
+         }
+-- 
+1.7.5.4
+

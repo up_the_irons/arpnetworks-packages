@@ -1,0 +1,121 @@
+From 8031efa935657cd7957ec927a1c3e37519d3d5a0 Mon Sep 17 00:00:00 2001
+From: Wayne Xia <xiawenc@linux.vnet.ibm.com>
+Date: Fri, 8 Jul 2011 11:03:16 +0800
+Subject: [PATCH 50/91] Fix jpeg decoder problem when it is used in 24 BPP
+ mode.
+
+Signed-off-by: Wayne Xia <xiawenc@linux.vnet.ibm.com>
+---
+ src/bootsplash.c |    3 ++-
+ src/jpeg.c       |   31 ++++++++++++++++++++++---------
+ src/jpeg.h       |    4 ++--
+ 3 files changed, 26 insertions(+), 12 deletions(-)
+
+diff --git a/src/bootsplash.c b/src/bootsplash.c
+index 51f4f4f..9c33b80 100644
+--- a/src/bootsplash.c
++++ b/src/bootsplash.c
+@@ -256,7 +256,8 @@ enable_bootsplash(void)
+ 
+     if (type == 0) {
+         dprintf(5, "Decompressing bootsplash.jpg\n");
+-        ret = jpeg_show(jpeg, picture, width, height, depth);
++        ret = jpeg_show(jpeg, picture, width, height, depth,
++                            mode_info->bytes_per_scanline);
+         if (ret) {
+             dprintf(1, "jpeg_show failed with return code %d...\n", ret);
+             goto done;
+diff --git a/src/jpeg.c b/src/jpeg.c
+index 1068291..a96a9d7 100644
+--- a/src/jpeg.c
++++ b/src/jpeg.c
+@@ -394,10 +394,10 @@ void jpeg_get_size(struct jpeg_decdata *jpeg, int *width, int *height)
+     *height = jpeg->height;
+ }
+ 
+-int jpeg_show(struct jpeg_decdata *jpeg, unsigned char *pic
+-              , int width, int height, int depth)
++int jpeg_show(struct jpeg_decdata *jpeg, unsigned char *pic, int width
++              , int height, int depth, int bytes_per_line_dest)
+ {
+-    int m, mcusx, mcusy, mx, my;
++    int m, mcusx, mcusy, mx, my, mloffset, jpgbpl;
+     int max[6];
+ 
+     if (jpeg->height != height)
+@@ -405,6 +405,9 @@ int jpeg_show(struct jpeg_decdata *jpeg, unsigned char *pic
+     if (jpeg->width != width)
+         return ERR_WIDTH_MISMATCH;
+ 
++    jpgbpl = width * depth / 8;
++    mloffset = bytes_per_line_dest > jpgbpl ? bytes_per_line_dest : jpgbpl;
++
+     mcusx = jpeg->width >> 4;
+     mcusy = jpeg->height >> 4;
+ 
+@@ -434,18 +437,18 @@ int jpeg_show(struct jpeg_decdata *jpeg, unsigned char *pic
+             switch (depth) {
+             case 32:
+                 col221111_32(jpeg->out,
+-                             pic + (my * 16 * mcusx + mx) * 16 * 4,
+-                             mcusx * 16 * 4);
++                             pic + (my * 16 * mloffset + mx * 16 * 4),
++                             mloffset);
+                 break;
+             case 24:
+                 col221111(jpeg->out,
+-                          pic + (my * 16 * mcusx + mx) * 16 * 3,
+-                          mcusx * 16 * 3);
++                          pic + (my * 16 * mloffset + mx * 16 * 3),
++                          mloffset);
+                 break;
+             case 16:
+                 col221111_16(jpeg->out,
+-                             pic + (my * 16 * mcusx + mx) * (16 * 2),
+-                             mcusx * (16 * 2));
++                             pic + (my * 16 * mloffset + mx * 16 * 2),
++                             mloffset);
+                 break;
+             default:
+                 return ERR_DEPTH_MISMATCH;
+@@ -887,6 +890,15 @@ static void initcol(PREC q[][64])
+ 
+ #endif
+ 
++#ifdef __LITTLE_ENDIAN
++#define PIC(yin, xin, p, xout)                   \
++(                                                \
++  y = outy[(yin) * 8 + xin],                     \
++  STORECLAMP(p[(xout) * 3 + 2], y + cr),         \
++  STORECLAMP(p[(xout) * 3 + 1], y - cg),         \
++  STORECLAMP(p[(xout) * 3 + 0], y + cb)          \
++)
++#else
+ #define PIC(yin, xin, p, xout)                   \
+ (                                                \
+   y = outy[(yin) * 8 + xin],                     \
+@@ -894,6 +906,7 @@ static void initcol(PREC q[][64])
+   STORECLAMP(p[(xout) * 3 + 1], y - cg),         \
+   STORECLAMP(p[(xout) * 3 + 2], y + cb)          \
+ )
++#endif
+ 
+ #ifdef __LITTLE_ENDIAN
+ #define PIC_16(yin, xin, p, xout, add)           \
+diff --git a/src/jpeg.h b/src/jpeg.h
+index a2ac501..2d08f45 100644
+--- a/src/jpeg.h
++++ b/src/jpeg.h
+@@ -5,7 +5,7 @@ struct jpeg_decdata;
+ struct jpeg_decdata *jpeg_alloc(void);
+ int jpeg_decode(struct jpeg_decdata *jpeg, unsigned char *buf);
+ void jpeg_get_size(struct jpeg_decdata *jpeg, int *width, int *height);
+-int jpeg_show(struct jpeg_decdata *jpeg, unsigned char *pic
+-              , int width, int height, int depth);
++int jpeg_show(struct jpeg_decdata *jpeg, unsigned char *pic, int width
++              , int height, int depth, int bytes_per_line_dest);
+ 
+ #endif
+-- 
+1.7.5.4
+

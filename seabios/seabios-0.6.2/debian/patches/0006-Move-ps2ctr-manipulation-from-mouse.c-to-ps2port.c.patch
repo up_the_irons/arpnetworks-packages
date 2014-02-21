@@ -1,0 +1,95 @@
+From 9ead6fc588b783e10fa98ee4d989630be998b4a8 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sat, 7 May 2011 14:19:29 -0400
+Subject: [PATCH 06/91] Move ps2ctr manipulation from mouse.c to ps2port.c.
+
+This simplifies the mouse.c code.  It also prevents USB mouse
+interaction from changing the ps2 port setup.
+---
+ src/mouse.c   |   24 +++---------------------
+ src/ps2port.c |   11 +++++++++++
+ 2 files changed, 14 insertions(+), 21 deletions(-)
+
+diff --git a/src/mouse.c b/src/mouse.c
+index 09273b0..e26cf69 100644
+--- a/src/mouse.c
++++ b/src/mouse.c
+@@ -37,23 +37,11 @@ mouse_command(int command, u8 *param)
+ #define RET_ENEEDRESEND  0x04
+ #define RET_ENOHANDLER   0x05
+ 
+-static int
+-disable_mouse(u16 ebda_seg)
+-{
+-    u8 ps2ctr = GET_EBDA2(ebda_seg, ps2ctr);
+-    ps2ctr |= I8042_CTR_AUXDIS;
+-    ps2ctr &= ~I8042_CTR_AUXINT;
+-    SET_EBDA2(ebda_seg, ps2ctr, ps2ctr);
+-
+-    return mouse_command(PSMOUSE_CMD_DISABLE, NULL);
+-}
+-
+ // Disable Mouse
+ static void
+ mouse_15c20000(struct bregs *regs)
+ {
+-    u16 ebda_seg = get_ebda_seg();
+-    int ret = disable_mouse(ebda_seg);
++    int ret = mouse_command(PSMOUSE_CMD_DISABLE, NULL);
+     if (ret)
+         set_code_invalid(regs, RET_ENEEDRESEND);
+     else
+@@ -64,18 +52,12 @@ mouse_15c20000(struct bregs *regs)
+ static void
+ mouse_15c20001(struct bregs *regs)
+ {
+-    u16 ebda_seg = get_ebda_seg();
+-    u8 mouse_flags_2 = GET_EBDA2(ebda_seg, mouse_flag2);
++    u8 mouse_flags_2 = GET_EBDA(mouse_flag2);
+     if ((mouse_flags_2 & 0x80) == 0) {
+         set_code_invalid(regs, RET_ENOHANDLER);
+         return;
+     }
+ 
+-    u8 ps2ctr = GET_EBDA2(ebda_seg, ps2ctr);
+-    ps2ctr &= ~I8042_CTR_AUXDIS;
+-    ps2ctr |= I8042_CTR_AUXINT;
+-    SET_EBDA2(ebda_seg, ps2ctr, ps2ctr);
+-
+     int ret = mouse_command(PSMOUSE_CMD_ENABLE, NULL);
+     if (ret)
+         set_code_invalid(regs, RET_ENEEDRESEND);
+@@ -250,7 +232,7 @@ mouse_15c207(struct bregs *regs)
+         /* remove handler */
+         if ((mouse_flags_2 & 0x80) != 0) {
+             mouse_flags_2 &= ~0x80;
+-            disable_mouse(ebda_seg);
++            mouse_command(PSMOUSE_CMD_DISABLE, NULL);
+         }
+     } else {
+         /* install handler */
+diff --git a/src/ps2port.c b/src/ps2port.c
+index d1e6d48..81d47c9 100644
+--- a/src/ps2port.c
++++ b/src/ps2port.c
+@@ -327,6 +327,17 @@ ps2_kbd_command(int command, u8 *param)
+ int
+ ps2_mouse_command(int command, u8 *param)
+ {
++    // Update ps2ctr for mouse enable/disable.
++    if (command == PSMOUSE_CMD_ENABLE || command == PSMOUSE_CMD_DISABLE) {
++        u16 ebda_seg = get_ebda_seg();
++        u8 ps2ctr = GET_EBDA2(ebda_seg, ps2ctr);
++        if (command == PSMOUSE_CMD_ENABLE)
++            ps2ctr = (ps2ctr | I8042_CTR_AUXINT) & ~I8042_CTR_AUXDIS;
++        else
++            ps2ctr = (ps2ctr | I8042_CTR_AUXDIS) & ~I8042_CTR_AUXINT;
++        SET_EBDA2(ebda_seg, ps2ctr, ps2ctr);
++    }
++
+     return ps2_command(1, command, param);
+ }
+ 
+-- 
+1.7.5.4
+

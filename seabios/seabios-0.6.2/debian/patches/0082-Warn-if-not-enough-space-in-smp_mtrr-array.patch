@@ -1,0 +1,28 @@
+From e0f87ce6610a0f341ff79c2c40ddc29f26932353 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Fri, 29 Jul 2011 19:21:07 -0400
+Subject: [PATCH 82/91] Warn if not enough space in smp_mtrr array.
+
+---
+ src/smp.c |    4 +++-
+ 1 files changed, 3 insertions(+), 1 deletions(-)
+
+diff --git a/src/smp.c b/src/smp.c
+index 2317d36..8c077a1 100644
+--- a/src/smp.c
++++ b/src/smp.c
+@@ -24,8 +24,10 @@ void
+ wrmsr_smp(u32 index, u64 val)
+ {
+     wrmsr(index, val);
+-    if (smp_mtrr_count >= ARRAY_SIZE(smp_mtrr))
++    if (smp_mtrr_count >= ARRAY_SIZE(smp_mtrr)) {
++        warn_noalloc();
+         return;
++    }
+     smp_mtrr[smp_mtrr_count].ecx = index;
+     smp_mtrr[smp_mtrr_count].eax = val;
+     smp_mtrr[smp_mtrr_count].edx = val >> 32;
+-- 
+1.7.5.4
+

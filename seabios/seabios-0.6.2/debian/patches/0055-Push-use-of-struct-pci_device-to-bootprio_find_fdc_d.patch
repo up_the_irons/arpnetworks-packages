@@ -1,0 +1,66 @@
+From 03e589cf31d449070dc4e920d9bfa2b5caaa1a1c Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sat, 9 Jul 2011 14:35:37 -0400
+Subject: [PATCH 55/91] Push use of 'struct pci_device' to
+ bootprio_find_fdc_device().
+
+Signed-off-by: Kevin O'Connor <kevin@koconnor.net>
+---
+ src/boot.c   |    6 +++---
+ src/boot.h   |    2 +-
+ src/floppy.c |    2 +-
+ 3 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/src/boot.c b/src/boot.c
+index 5c0e0bb..f769339 100644
+--- a/src/boot.c
++++ b/src/boot.c
+@@ -155,16 +155,16 @@ int bootprio_find_ata_device(int bdf, int chanid, int slave)
+     return find_prio(desc);
+ }
+ 
+-int bootprio_find_fdc_device(int bdf, int port, int fdid)
++int bootprio_find_fdc_device(struct pci_device *pci, int port, int fdid)
+ {
+     if (!CONFIG_BOOTORDER)
+         return -1;
+-    if (bdf == -1)
++    if (!pci)
+         // support only pci machine for now
+         return -1;
+     // Find floppy - for example: /pci@i0cf8/isa@1/fdc@03f1/floppy@0
+     char desc[256], *p;
+-    p = build_pci_path(desc, sizeof(desc), "isa", find_pci(bdf));
++    p = build_pci_path(desc, sizeof(desc), "isa", pci);
+     snprintf(p, desc+sizeof(desc)-p, "/fdc@%04x/floppy@%x", port, fdid);
+     return find_prio(desc);
+ }
+diff --git a/src/boot.h b/src/boot.h
+index 92af9da..ae8ff89 100644
+--- a/src/boot.h
++++ b/src/boot.h
+@@ -15,7 +15,7 @@ void boot_prep(void);
+ struct pci_device;
+ int bootprio_find_pci_device(struct pci_device *pci);
+ int bootprio_find_ata_device(int bdf, int chanid, int slave);
+-int bootprio_find_fdc_device(int bdf, int port, int fdid);
++int bootprio_find_fdc_device(struct pci_device *pci, int port, int fdid);
+ int bootprio_find_pci_rom(int bdf, int instance);
+ int bootprio_find_named_rom(const char *name, int instance);
+ int bootprio_find_usb(struct pci_device *pci, u64 path);
+diff --git a/src/floppy.c b/src/floppy.c
+index 8009af0..383744a 100644
+--- a/src/floppy.c
++++ b/src/floppy.c
+@@ -124,7 +124,7 @@ addFloppy(int floppyid, int ftype)
+         return;
+     char *desc = znprintf(MAXDESCSIZE, "Floppy [drive %c]", 'A' + floppyid);
+     struct pci_device *pci = pci_find_class(PCI_CLASS_BRIDGE_ISA); /* isa-to-pci bridge */
+-    int prio = bootprio_find_fdc_device(pci->bdf, PORT_FD_BASE, floppyid);
++    int prio = bootprio_find_fdc_device(pci, PORT_FD_BASE, floppyid);
+     boot_add_floppy(drive_g, desc, prio);
+ }
+ 
+-- 
+1.7.5.4
+

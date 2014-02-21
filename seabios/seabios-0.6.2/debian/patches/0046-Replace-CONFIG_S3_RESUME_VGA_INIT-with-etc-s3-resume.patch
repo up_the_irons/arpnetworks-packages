@@ -1,0 +1,61 @@
+From 8b0c509e7cdb55b0ebd58cc105e49e75526ba620 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Tue, 5 Jul 2011 20:50:32 -0400
+Subject: [PATCH 46/91] Replace CONFIG_S3_RESUME_VGA_INIT with
+ "etc/s3-resume-vga-init" file.
+
+---
+ src/Kconfig      |    6 ------
+ src/optionroms.c |    5 ++++-
+ 2 files changed, 4 insertions(+), 7 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index 3f63374..06ab8c1 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -281,12 +281,6 @@ menu "BIOS interfaces"
+         default y
+         help
+             Support S3 resume handler.
+-    config S3_RESUME_VGA_INIT
+-        depends on S3_RESUME
+-        bool "Run VGA rom on S3 resume"
+-        default n
+-        help
+-            Run the vga rom during S3 resume.
+ 
+     config VGAHOOKS
+         depends on COREBOOT
+diff --git a/src/optionroms.c b/src/optionroms.c
+index 3839497..6c4c9ff 100644
+--- a/src/optionroms.c
++++ b/src/optionroms.c
+@@ -461,6 +461,8 @@ optionrom_setup(void)
+  * VGA init
+  ****************************************************************/
+ 
++static int S3ResumeVgaInit;
++
+ // Call into vga code to turn on console.
+ void
+ vga_setup(void)
+@@ -471,6 +473,7 @@ vga_setup(void)
+     dprintf(1, "Scan for VGA option rom\n");
+ 
+     EnforceChecksum = romfile_loadint("etc/optionroms-checksum", 1);
++    S3ResumeVgaInit = romfile_loadint("etc/s3-resume-vga-init", 0);
+ 
+     if (CONFIG_OPTIONROMS_DEPLOYED) {
+         // Option roms are already deployed on the system.
+@@ -505,7 +508,7 @@ vga_setup(void)
+ void
+ s3_resume_vga_init(void)
+ {
+-    if (!CONFIG_S3_RESUME_VGA_INIT)
++    if (!S3ResumeVgaInit)
+         return;
+     struct rom_header *rom = (void*)BUILD_ROM_START;
+     if (! is_valid_rom(rom))
+-- 
+1.7.5.4
+

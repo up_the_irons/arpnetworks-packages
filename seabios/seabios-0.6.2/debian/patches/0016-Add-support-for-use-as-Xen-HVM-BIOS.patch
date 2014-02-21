@@ -1,0 +1,525 @@
+From 74c78786719b202557d4f177bd290ddd98e979fe Mon Sep 17 00:00:00 2001
+From: Ian Campbell <ian.campbell@citrix.com>
+Date: Wed, 1 Jun 2011 11:00:29 +0100
+Subject: [PATCH 16/91] Add support for use as Xen HVM BIOS.
+
+SeaBIOS is called by Xen's hvmloader which does the basic platform
+setup (PCI, APIC, etc) and provides the various BIOS tables. Therefore
+avoid re-doing that setup and copy out the tables as necessary. A
+simple data structure is defined to pass the addresses of these
+tables.
+
+This patch also establishes the basic infrastructure to make
+hypercalls, although it currently only uses it to query the hypervisor
+version.
+
+Signed-off-by: Ian Campbell <ian.campbell@citrix.com>
+---
+ Makefile         |    2 +-
+ src/Kconfig      |    6 ++
+ src/biostables.c |   22 ++++++++
+ src/mtrr.c       |    3 +-
+ src/pciinit.c    |    5 +-
+ src/post.c       |   10 ++++
+ src/shadow.c     |    5 +-
+ src/util.h       |    1 +
+ src/xen.c        |  149 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/xen.h        |  135 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 10 files changed, 332 insertions(+), 6 deletions(-)
+ create mode 100644 src/xen.c
+ create mode 100644 src/xen.h
+
+diff --git a/Makefile b/Makefile
+index 07ba2d0..05bcee3 100644
+--- a/Makefile
++++ b/Makefile
+@@ -20,7 +20,7 @@ SRC16=$(SRCBOTH) system.c disk.c font.c
+ SRC32FLAT=$(SRCBOTH) post.c shadow.c memmap.c coreboot.c boot.c \
+       acpi.c smm.c mptable.c smbios.c pciinit.c optionroms.c mtrr.c \
+       lzmadecode.c bootsplash.c jpeg.c usb-hub.c paravirt.c dev-i440fx.c \
+-      pci_region.c biostables.c
++      pci_region.c biostables.c xen.c
+ SRC32SEG=util.c output.c pci.c pcibios.c apm.c stacks.c
+ 
+ cc-option = $(shell if test -z "`$(1) $(2) -S -o /dev/null -xc \
+diff --git a/src/Kconfig b/src/Kconfig
+index 15485ac..b9875c8 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -10,6 +10,12 @@ menu "General Features"
+         help
+             Configure as a coreboot payload.
+ 
++    config XEN
++        bool "Build for Xen HVM"
++        default n
++        help
++            Configure to be used by xen hvmloader, for a HVM guest.
++
+     config THREADS
+         bool "Parallelize hardware init"
+         default y
+diff --git a/src/biostables.c b/src/biostables.c
+index 21b8573..761b260 100644
+--- a/src/biostables.c
++++ b/src/biostables.c
+@@ -9,6 +9,7 @@
+ #include "pci.h" // struct pir_header
+ #include "acpi.h" // struct rsdp_descriptor
+ #include "mptable.h" // MPTABLE_SIGNATURE
++#include "smbios.h" // struct smbios_entry_point
+ 
+ void
+ copy_pir(void *pos)
+@@ -81,3 +82,24 @@ copy_acpi_rsdp(void *pos)
+     memcpy(newpos, pos, length);
+     RsdpAddr = newpos;
+ }
++
++void
++copy_smbios(void *pos)
++{
++    struct smbios_entry_point *p = pos;
++    if (memcmp(p->anchor_string, "_SM_", 4))
++        return;
++    if (checksum(pos, 0x10) != 0)
++        return;
++    if (memcmp(p->intermediate_anchor_string, "_DMI_", 5))
++        return;
++    if (checksum(pos+0x10, p->length-0x10) != 0)
++        return;
++    struct smbios_entry_point *newpos = malloc_fseg(sizeof(p->length));
++    if (!newpos) {
++        warn_noalloc();
++        return;
++    }
++    dprintf(1, "Copying SMBIOS entry point from %p to %p\n", pos, newpos);
++    memcpy(newpos, pos, p->length);
++}
+diff --git a/src/mtrr.c b/src/mtrr.c
+index 0502c18..0548043 100644
+--- a/src/mtrr.c
++++ b/src/mtrr.c
+@@ -6,6 +6,7 @@
+ 
+ #include "util.h" // dprintf
+ #include "biosvar.h" // GET_EBDA
++#include "xen.h" // usingXen
+ 
+ #define MSR_MTRRcap                    0x000000fe
+ #define MSR_MTRRfix64K_00000           0x00000250
+@@ -32,7 +33,7 @@
+ 
+ void mtrr_setup(void)
+ {
+-    if (!CONFIG_MTRR_INIT || CONFIG_COREBOOT)
++    if (!CONFIG_MTRR_INIT || CONFIG_COREBOOT || usingXen())
+         return;
+ 
+     u32 eax, ebx, ecx, edx, cpuid_features;
+diff --git a/src/pciinit.c b/src/pciinit.c
+index ee2e72d..0bd9b72 100644
+--- a/src/pciinit.c
++++ b/src/pciinit.c
+@@ -11,6 +11,7 @@
+ #include "pci_ids.h" // PCI_VENDOR_ID_INTEL
+ #include "pci_regs.h" // PCI_COMMAND
+ #include "dev-i440fx.h"
++#include "xen.h" // usingXen
+ 
+ #define PCI_ROM_SLOT 6
+ #define PCI_NUM_REGIONS 7
+@@ -396,8 +397,8 @@ pci_bios_init_bus(void)
+ void
+ pci_setup(void)
+ {
+-    if (CONFIG_COREBOOT)
+-        // Already done by coreboot.
++    if (CONFIG_COREBOOT || usingXen())
++        // Already done by coreboot or Xen.
+         return;
+ 
+     dprintf(3, "pci setup\n");
+diff --git a/src/post.c b/src/post.c
+index 7d2b5f2..70d98a6 100644
+--- a/src/post.c
++++ b/src/post.c
+@@ -23,6 +23,7 @@
+ #include "usb.h" // usb_setup
+ #include "smbios.h" // smbios_init
+ #include "paravirt.h" // qemu_cfg_port_probe
++#include "xen.h" // xen_probe_hvm_info
+ #include "ps2port.h" // ps2port_setup
+ #include "virtio-blk.h" // virtio_blk_setup
+ 
+@@ -101,6 +102,8 @@ ram_probe(void)
+     dprintf(3, "Find memory size\n");
+     if (CONFIG_COREBOOT) {
+         coreboot_setup();
++    } else if (usingXen()) {
++	xen_setup();
+     } else {
+         // On emulators, get memory size from nvram.
+         u32 rs = ((inb_cmos(CMOS_MEM_EXTMEM2_LOW) << 16)
+@@ -158,6 +161,10 @@ init_bios_tables(void)
+         coreboot_copy_biostable();
+         return;
+     }
++    if (usingXen()) {
++	xen_copy_biostables();
++	return;
++    }
+ 
+     create_pirtable();
+ 
+@@ -380,6 +387,9 @@ _start(void)
+         // This is a soft reboot - invoke a hard reboot.
+         tryReboot();
+ 
++    // Check if we are running under Xen.
++    xen_probe();
++
+     // Allow writes to modify bios area (0xf0000)
+     make_bios_writable();
+     HaveRunPost = 1;
+diff --git a/src/shadow.c b/src/shadow.c
+index ed530e0..cb39ddf 100644
+--- a/src/shadow.c
++++ b/src/shadow.c
+@@ -10,6 +10,7 @@
+ #include "config.h" // CONFIG_*
+ #include "pci_ids.h" // PCI_VENDOR_ID_INTEL
+ #include "dev-i440fx.h"
++#include "xen.h" // usingXen
+ 
+ // On the emulators, the bios at 0xf0000 is also at 0xffff0000
+ #define BIOS_SRC_OFFSET 0xfff00000
+@@ -102,7 +103,7 @@ static const struct pci_device_id dram_controller_make_writable_tbl[] = {
+ void
+ make_bios_writable(void)
+ {
+-    if (CONFIG_COREBOOT)
++    if (CONFIG_COREBOOT || usingXen())
+         return;
+ 
+     dprintf(3, "enabling shadow ram\n");
+@@ -127,7 +128,7 @@ static const struct pci_device_id dram_controller_make_readonly_tbl[] = {
+ void
+ make_bios_readonly(void)
+ {
+-    if (CONFIG_COREBOOT)
++    if (CONFIG_COREBOOT || usingXen())
+         return;
+ 
+     dprintf(3, "locking shadow ram\n");
+diff --git a/src/util.h b/src/util.h
+index cb54432..00433e2 100644
+--- a/src/util.h
++++ b/src/util.h
+@@ -409,6 +409,7 @@ void coreboot_setup(void);
+ void copy_pir(void *pos);
+ void copy_mptable(void *pos);
+ void copy_acpi_rsdp(void *pos);
++void copy_smbios(void *pos);
+ 
+ // vgahooks.c
+ extern int VGAbdf;
+diff --git a/src/xen.c b/src/xen.c
+new file mode 100644
+index 0000000..4072793
+--- /dev/null
++++ b/src/xen.c
+@@ -0,0 +1,149 @@
++// Xen HVM support
++//
++// Copyright (C) 2011 Citrix Systems.
++//
++// This file may be distributed under the terms of the GNU LGPLv3 license.
++
++#include "config.h"
++#include "xen.h"
++
++#include "memmap.h" // add_e820
++#include "types.h" // ASM32FLAT
++#include "util.h" // copy_acpi_rsdp
++
++#define INFO_PHYSICAL_ADDRESS 0x00001000
++
++u32 xen_cpuid_base = 0;
++
++struct xen_seabios_info {
++    char signature[14]; /* XenHVMSeaBIOS\0 */
++    u8 length;     /* Length of this struct */
++    u8 checksum;   /* Set such that the sum over bytes 0..length == 0 */
++    /*
++     * Physical address of an array of tables_nr elements.
++     *
++     * Each element is a 32 bit value contianing the physical address
++     * of a BIOS table.
++     */
++    u32 tables;
++    u32 tables_nr;
++    /*
++     * Physical address of the e820 table, contains e820_nr entries.
++     */
++    u32 e820;
++    u32 e820_nr;
++} PACKED;
++
++static void validate_info(struct xen_seabios_info *t)
++{
++    if ( memcmp(t->signature, "XenHVMSeaBIOS", 14) )
++        panic("Bad Xen info signature\n");
++
++    if ( t->length < sizeof(struct xen_seabios_info) )
++        panic("Bad Xen info length\n");
++
++    if (checksum(t, t->length) != 0)
++        panic("Bad Xen info checksum\n");
++}
++
++void xen_probe(void)
++{
++    u32 base, eax, ebx, ecx, edx;
++    char signature[13];
++
++    if (!CONFIG_XEN)
++        return;
++
++    for (base = 0x40000000; base < 0x40010000; base += 0x100) {
++        cpuid(base, &eax, &ebx, &ecx, &edx);
++        memcpy(signature + 0, &ebx, 4);
++        memcpy(signature + 4, &ecx, 4);
++        memcpy(signature + 8, &edx, 4);
++        signature[12] = 0;
++
++        dprintf(1, "Found hypervisor signature \"%s\" at %x\n",
++                signature, base);
++        if (strcmp(signature, "XenVMMXenVMM") == 0) {
++            if ((eax - base) < 2)
++                panic("Insufficient Xen cpuid leaves. eax=%x at base %x\n",
++                      eax, base);
++            xen_cpuid_base = base;
++            break;
++        }
++    }
++}
++
++static int hypercall_xen_version( int cmd, void *arg)
++{
++    return _hypercall2(int, xen_version, cmd, arg);
++}
++
++/* Fill in hypercall transfer pages. */
++void xen_init_hypercalls(void)
++{
++    u32 eax, ebx, ecx, edx;
++    xen_extraversion_t extraversion;
++    unsigned long i;
++
++    if (!usingXen())
++        return;
++
++    cpuid(xen_cpuid_base + 2, &eax, &ebx, &ecx, &edx);
++
++    xen_hypercall_page = (unsigned long)memalign_high(PAGE_SIZE, eax*PAGE_SIZE);
++    if (!xen_hypercall_page)
++        panic("unable to allocate Xen hypercall page\n");
++
++    dprintf(1, "Allocated Xen hypercall page at %lx\n", xen_hypercall_page);
++    for ( i = 0; i < eax; i++ )
++        wrmsr(ebx, xen_hypercall_page + (i << 12) + i);
++
++    /* Print version information. */
++    cpuid(xen_cpuid_base + 1, &eax, &ebx, &ecx, &edx);
++    hypercall_xen_version(XENVER_extraversion, extraversion);
++    dprintf(1, "Detected Xen v%u.%u%s\n", eax >> 16, eax & 0xffff, extraversion);
++}
++
++void xen_copy_biostables(void)
++{
++    struct xen_seabios_info *info = (void *)INFO_PHYSICAL_ADDRESS;
++    u32 *tables = (u32 *)info->tables;
++    int i;
++
++    dprintf(1, "xen: copy BIOS tables...\n");
++    for (i=0; i<info->tables_nr; i++) {
++        void *table = (void *)tables[i];
++        copy_acpi_rsdp(table);
++        copy_mptable(table);
++        copy_pir(table);
++        copy_smbios(table);
++    }
++}
++
++void xen_setup(void)
++{
++    u64 maxram = 0, maxram_over4G = 0;
++    int i;
++    struct xen_seabios_info *info = (void *)INFO_PHYSICAL_ADDRESS;
++    struct e820entry *e820 = (struct e820entry *)info->e820;
++    validate_info(info);
++
++    dprintf(1, "xen: copy e820...\n");
++
++    for (i = 0; i < info->e820_nr; i++) {
++        struct e820entry *e = &e820[i];
++        if (e->type == E820_ACPI || e->type == E820_RAM) {
++            u64 end = e->start + e->size;
++            if (end > 0x100000000ull) {
++                end -= 0x100000000ull;
++                if (end > maxram_over4G)
++                    maxram_over4G = end;
++            } else if (end > maxram)
++                maxram = end;
++        }
++        add_e820(e->start, e->size, e->type);
++    }
++
++    RamSize = maxram;
++    RamSizeOver4G = maxram_over4G;
++}
+diff --git a/src/xen.h b/src/xen.h
+new file mode 100644
+index 0000000..0ed1e9f
+--- /dev/null
++++ b/src/xen.h
+@@ -0,0 +1,135 @@
++#ifndef __XEN_H
++#define __XEN_H
++
++#include "util.h"
++
++extern u32 xen_cpuid_base;
++
++void xen_probe(void);
++void xen_setup(void);
++void xen_init_hypercalls(void);
++void xen_copy_biostables(void);
++
++static inline int usingXen(void) {
++    if (!CONFIG_XEN)
++	return 0;
++    return (xen_cpuid_base != 0);
++}
++
++unsigned long xen_hypercall_page;
++
++#define _hypercall0(type, name)                                         \
++({                                                                      \
++    unsigned long __hentry = xen_hypercall_page+__HYPERVISOR_##name*32; \
++    long __res;                                                         \
++    asm volatile (                                                      \
++        "call *%%eax"                                                   \
++        : "=a" (__res)                                                  \
++        : "0" (__hentry)                                                \
++        : "memory" );                                                   \
++    (type)__res;                                                        \
++})
++
++#define _hypercall1(type, name, a1)                                     \
++({                                                                      \
++    unsigned long __hentry = xen_hypercall_page+__HYPERVISOR_##name*32; \
++    long __res, __ign1;                                                 \
++    asm volatile (                                                      \
++        "call *%%eax"                                                   \
++        : "=a" (__res), "=b" (__ign1)                                   \
++        : "0" (__hentry), "1" ((long)(a1))                              \
++        : "memory" );                                                   \
++    (type)__res;                                                        \
++})
++
++#define _hypercall2(type, name, a1, a2)                                 \
++({                                                                      \
++    unsigned long __hentry = xen_hypercall_page+__HYPERVISOR_##name*32; \
++    long __res, __ign1, __ign2;                                         \
++    asm volatile (                                                      \
++        "call *%%eax"                                                   \
++        : "=a" (__res), "=b" (__ign1), "=c" (__ign2)                    \
++        : "0" (__hentry), "1" ((long)(a1)), "2" ((long)(a2))            \
++        : "memory" );                                                   \
++    (type)__res;                                                        \
++})
++
++#define _hypercall3(type, name, a1, a2, a3)                             \
++({                                                                      \
++    unsigned long __hentry = xen_hypercall_page+__HYPERVISOR_##name*32; \
++    long __res, __ign1, __ign2, __ign3;                                 \
++    asm volatile (                                                      \
++        "call *%%eax"                                                   \
++        : "=a" (__res), "=b" (__ign1), "=c" (__ign2),                   \
++          "=d" (__ign3)                                                 \
++        : "0" (__hentry), "1" ((long)(a1)), "2" ((long)(a2)),           \
++          "3" ((long)(a3))                                              \
++        : "memory" );                                                   \
++    (type)__res;                                                        \
++})
++
++#define _hypercall4(type, name, a1, a2, a3, a4)                         \
++({                                                                      \
++    unsigned long __hentry = xen_hypercall_page+__HYPERVISOR_##name*32; \
++    long __res, __ign1, __ign2, __ign3, __ign4;                         \
++    asm volatile (                                                      \
++        "call *%%eax"                                                   \
++        : "=a" (__res), "=b" (__ign1), "=c" (__ign2),                   \
++          "=d" (__ign3), "=S" (__ign4)                                  \
++        : "0" (__hentry), "1" ((long)(a1)), "2" ((long)(a2)),           \
++          "3" ((long)(a3)), "4" ((long)(a4))                            \
++        : "memory" );                                                   \
++    (type)__res;                                                        \
++})
++
++#define _hypercall5(type, name, a1, a2, a3, a4, a5)                     \
++({                                                                      \
++    unsigned long __hentry = xen_hypercall_page+__HYPERVISOR_##name*32; \
++    long __res, __ign1, __ign2, __ign3, __ign4, __ign5;                 \
++    asm volatile (                                                      \
++        "call *%%eax"                                                   \
++        : "=a" (__res), "=b" (__ign1), "=c" (__ign2),                   \
++          "=d" (__ign3), "=S" (__ign4), "=D" (__ign5)                   \
++        : "0" (__hentry), "1" ((long)(a1)), "2" ((long)(a2)),           \
++          "3" ((long)(a3)), "4" ((long)(a4)),                           \
++          "5" ((long)(a5))                                              \
++        : "memory" );                                                   \
++    (type)__res;                                                        \
++})
++
++/******************************************************************************
++ *
++ * The following interface definitions are taken from Xen and have the
++ * following license:
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to
++ * deal in the Software without restriction, including without limitation the
++ * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
++ * sell copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ */
++
++/* xen.h */
++
++#define __HYPERVISOR_xen_version          17
++
++/* version.h */
++
++/* arg == xen_extraversion_t. */
++#define XENVER_extraversion 1
++typedef char xen_extraversion_t[16];
++#define XEN_EXTRAVERSION_LEN (sizeof(xen_extraversion_t))
++
++#endif
+-- 
+1.7.5.4
+

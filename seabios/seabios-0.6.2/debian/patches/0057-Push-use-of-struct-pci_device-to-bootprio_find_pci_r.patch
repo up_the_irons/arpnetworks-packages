@@ -1,0 +1,71 @@
+From fce9189a6b19894eba0282c90fd0c1bfbcc12362 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sat, 9 Jul 2011 14:47:47 -0400
+Subject: [PATCH 57/91] Push use of 'struct pci_device' to
+ bootprio_find_pci_rom().
+
+Signed-off-by: Kevin O'Connor <kevin@koconnor.net>
+---
+ src/boot.c       |    4 ++--
+ src/boot.h       |    2 +-
+ src/optionroms.c |    4 ++--
+ 3 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/src/boot.c b/src/boot.c
+index 3fda39a..4e86477 100644
+--- a/src/boot.c
++++ b/src/boot.c
+@@ -169,13 +169,13 @@ int bootprio_find_fdc_device(struct pci_device *pci, int port, int fdid)
+     return find_prio(desc);
+ }
+ 
+-int bootprio_find_pci_rom(int bdf, int instance)
++int bootprio_find_pci_rom(struct pci_device *pci, int instance)
+ {
+     if (!CONFIG_BOOTORDER)
+         return -1;
+     // Find pci rom - for example: /pci@i0cf8/scsi@3:rom2
+     char desc[256], *p;
+-    p = build_pci_path(desc, sizeof(desc), "*", find_pci(bdf));
++    p = build_pci_path(desc, sizeof(desc), "*", pci);
+     if (instance)
+         snprintf(p, desc+sizeof(desc)-p, ":rom%d", instance);
+     return find_prio(desc);
+diff --git a/src/boot.h b/src/boot.h
+index 78d4f3b..d776aa1 100644
+--- a/src/boot.h
++++ b/src/boot.h
+@@ -16,7 +16,7 @@ struct pci_device;
+ int bootprio_find_pci_device(struct pci_device *pci);
+ int bootprio_find_ata_device(struct pci_device *pci, int chanid, int slave);
+ int bootprio_find_fdc_device(struct pci_device *pci, int port, int fdid);
+-int bootprio_find_pci_rom(int bdf, int instance);
++int bootprio_find_pci_rom(struct pci_device *pci, int instance);
+ int bootprio_find_named_rom(const char *name, int instance);
+ int bootprio_find_usb(struct pci_device *pci, u64 path);
+ 
+diff --git a/src/optionroms.c b/src/optionroms.c
+index 3d1a1e4..be02f2a 100644
+--- a/src/optionroms.c
++++ b/src/optionroms.c
+@@ -230,7 +230,7 @@ getRomPriority(u64 *sources, struct rom_header *rom, int instance)
+     if (!source)
+         return -1;
+     if (source & RS_PCIROM)
+-        return bootprio_find_pci_rom(source, instance);
++        return bootprio_find_pci_rom((void*)(u32)source, instance);
+     return bootprio_find_named_rom(romfile_name(source), instance);
+ }
+ 
+@@ -379,7 +379,7 @@ init_pcirom(struct pci_device *pci, int isvga, u64 *sources)
+     if (! rom)
+         // No ROM present.
+         return -1;
+-    setRomSource(sources, rom, RS_PCIROM | bdf);
++    setRomSource(sources, rom, RS_PCIROM | (u32)pci);
+     return init_optionrom(rom, bdf, isvga);
+ }
+ 
+-- 
+1.7.5.4
+

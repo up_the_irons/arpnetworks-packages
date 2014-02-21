@@ -1,0 +1,34 @@
+From 7fc039e9c262b4199fab497f3e12f4e425c37560 Mon Sep 17 00:00:00 2001
+From: Ian Campbell <ian.campbell@citrix.com>
+Date: Wed, 13 Jul 2011 11:46:40 +0100
+Subject: [PATCH 73/91] xen: actually setup hypercalls.
+
+This was somehow dropped during the iterations of the original Xen patches.
+It's actually harmless at the moment since there are no users of hypercalls but
+patches are being written to support Xen PV block devices which need this.
+
+It's not clear exactly how early this needs to be but I think it needs to be at
+least before init_hw() (since that would detect disk devices).
+
+Signed-off-by: Ian Campbell <ian.campbell@citrix.com>
+---
+ src/post.c |    3 +++
+ 1 files changed, 3 insertions(+), 0 deletions(-)
+
+diff --git a/src/post.c b/src/post.c
+index 6f7aa14..e195e89 100644
+--- a/src/post.c
++++ b/src/post.c
+@@ -229,6 +229,9 @@ maininit(void)
+     pci_setup();
+     smm_init();
+ 
++    // Setup Xen hypercalls
++    xen_init_hypercalls();
++
+     // Initialize internal tables
+     boot_setup();
+ 
+-- 
+1.7.5.4
+

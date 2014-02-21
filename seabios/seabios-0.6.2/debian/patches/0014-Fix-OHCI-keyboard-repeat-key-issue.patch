@@ -1,0 +1,31 @@
+From 3cabf78a971e1113edb07f94b80a9a631d27e1a5 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sun, 29 May 2011 09:48:28 -0400
+Subject: [PATCH 14/91] Fix OHCI keyboard repeat key issue.
+
+Mask toggleCarry and Halted flags in endpoint descriptor dword #2 so that
+the remaining head pointer field is valid for comparing with the next
+pointer.
+
+Signed-off-by: Scott Duplichan <scott@notabs.org>
+Signed-off-by: Kevin O'Connor <kevin@koconnor.net>
+---
+ src/usb-ohci.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/src/usb-ohci.c b/src/usb-ohci.c
+index 86eba0d..72b9f68 100644
+--- a/src/usb-ohci.c
++++ b/src/usb-ohci.c
+@@ -501,7 +501,7 @@ ohci_poll_intr(struct usb_pipe *p, void *data)
+ 
+     struct ohci_pipe *pipe = container_of(p, struct ohci_pipe, pipe);
+     struct ohci_td *tds = GET_FLATPTR(pipe->tds);
+-    struct ohci_td *head = (void*)GET_FLATPTR(pipe->ed.hwHeadP);
++    struct ohci_td *head = (void*)(GET_FLATPTR(pipe->ed.hwHeadP) & ~(ED_C|ED_H));
+     struct ohci_td *tail = (void*)GET_FLATPTR(pipe->ed.hwTailP);
+     int count = GET_FLATPTR(pipe->count);
+     int pos = (tail - tds + 1) % count;
+-- 
+1.7.5.4
+

@@ -1,0 +1,25 @@
+From fb2f10d074091573b2493f8bddedf3e9182d8313 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sun, 6 Mar 2011 18:26:13 -0500
+Subject: [PATCH 01/91] Prep version for next release.
+
+---
+ Makefile |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index 95039cb..9affb39 100644
+--- a/Makefile
++++ b/Makefile
+@@ -5,7 +5,7 @@
+ # This file may be distributed under the terms of the GNU LGPLv3 license.
+ 
+ # Program version
+-VERSION=0.6.2-$(shell date +"%Y%m%d_%H%M%S")-$(shell hostname)
++VERSION=pre-0.6.3-$(shell date +"%Y%m%d_%H%M%S")-$(shell hostname)
+ 
+ # Output directory
+ OUT=out/
+-- 
+1.7.5.4
+

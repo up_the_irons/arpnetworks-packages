@@ -1,0 +1,38 @@
+From 8e301472e324b6d6496d8b4ffc66863e99d7a505 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Tue, 9 Aug 2011 17:22:42 +0200
+Subject: [PATCH 91/91] pci: re-add isa bridge setup
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The switch to the two-pass pci initialization dropped the isa bridge
+initialization by accident.  That broke interrupts on FreeBSD 4.4 and
+maybe also other older guests which don't use ACPI for IRQ routing
+setup.  Add the bits back in.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+Tested-by: Bjørn Mork <bjorn@mork.no>
+---
+ src/pciinit.c |    5 +++++
+ 1 files changed, 5 insertions(+), 0 deletions(-)
+
+diff --git a/src/pciinit.c b/src/pciinit.c
+index 6331fdf..597c8ea 100644
+--- a/src/pciinit.c
++++ b/src/pciinit.c
+@@ -607,6 +607,11 @@ pci_setup(void)
+ 
+     pci_bios_init_device_in_bus(0 /* host bus */);
+ 
++    struct pci_device *pci;
++    foreachpci(pci) {
++        pci_init_device(pci_isa_bridge_tbl, pci, NULL);
++    }
++
+     free(busses);
+     busses_count = 0;
+ }
+-- 
+1.7.5.4
+

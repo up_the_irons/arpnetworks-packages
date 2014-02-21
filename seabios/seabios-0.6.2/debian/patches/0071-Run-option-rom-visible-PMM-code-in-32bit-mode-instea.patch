@@ -1,0 +1,171 @@
+From 533b6286cbc5a01e8aaafc2a8393a7d109f81958 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sat, 16 Jul 2011 13:13:12 -0400
+Subject: [PATCH 71/91] Run option rom visible PMM code in 32bit mode instead
+ of 16bit mode.
+
+Use call32() to jump into handle_pmm().  This reduces the amount of
+16bit code needed.
+
+Signed-off-by: Kevin O'Connor <kevin@koconnor.net>
+---
+ src/pmm.c       |   51 ++++++++++++++++++++++++++++++++++++++++-----------
+ src/post.c      |    3 +++
+ src/romlayout.S |    6 ++++--
+ src/stacks.c    |    2 +-
+ src/util.h      |    2 ++
+ 5 files changed, 50 insertions(+), 14 deletions(-)
+
+diff --git a/src/pmm.c b/src/pmm.c
+index e0770ac..2e9d1ff 100644
+--- a/src/pmm.c
++++ b/src/pmm.c
+@@ -44,13 +44,13 @@ struct zone_s {
+     struct allocinfo_s *info;
+ };
+ 
+-struct zone_s ZoneLow VAR32FLATVISIBLE;
+-struct zone_s ZoneHigh VAR32FLATVISIBLE;
+-struct zone_s ZoneFSeg VAR32FLATVISIBLE;
+-struct zone_s ZoneTmpLow VAR32FLATVISIBLE;
+-struct zone_s ZoneTmpHigh VAR32FLATVISIBLE;
++struct zone_s ZoneLow;
++struct zone_s ZoneHigh;
++struct zone_s ZoneFSeg;
++struct zone_s ZoneTmpLow;
++struct zone_s ZoneTmpHigh;
+ 
+-struct zone_s *Zones[] VAR32FLATVISIBLE = {
++struct zone_s *Zones[] = {
+     &ZoneTmpLow, &ZoneLow, &ZoneFSeg, &ZoneTmpHigh, &ZoneHigh
+ };
+ 
+@@ -225,6 +225,22 @@ malloc_setup(void)
+     }
+ }
+ 
++// Update pointers after code relocation.
++void
++malloc_fixupreloc(void)
++{
++    ASSERT32FLAT();
++    if (!CONFIG_RELOCATE_INIT)
++        return;
++    dprintf(3, "malloc fixup reloc\n");
++
++    int i;
++    for (i=0; i<ARRAY_SIZE(Zones); i++) {
++        struct zone_s *zone = Zones[i];
++        zone->info->pprev = &zone->info;
++    }
++}
++
+ void
+ malloc_finalize(void)
+ {
+@@ -542,7 +558,7 @@ handle_pmmXX(u16 *args)
+     return PMM_FUNCTION_NOT_SUPPORTED;
+ }
+ 
+-u32 VISIBLE16
++u32 VISIBLE32INIT
+ handle_pmm(u16 *args)
+ {
+     if (! CONFIG_PMM)
+@@ -551,12 +567,25 @@ handle_pmm(u16 *args)
+     u16 arg1 = args[0];
+     dprintf(DEBUG_HDL_pmm, "pmm call arg1=%x\n", arg1);
+ 
++    int oldpreempt;
++    if (CONFIG_THREAD_OPTIONROMS) {
++        // Not a preemption event - don't wait in wait_preempt()
++        oldpreempt = CanPreempt;
++        CanPreempt = 0;
++    }
++
++    u32 ret;
+     switch (arg1) {
+-    case 0x00: return handle_pmm00(args);
+-    case 0x01: return handle_pmm01(args);
+-    case 0x02: return handle_pmm02(args);
+-    default:   return handle_pmmXX(args);
++    case 0x00: ret = handle_pmm00(args); break;
++    case 0x01: ret = handle_pmm01(args); break;
++    case 0x02: ret = handle_pmm02(args); break;
++    default:   ret = handle_pmmXX(args); break;
+     }
++
++    if (CONFIG_THREAD_OPTIONROMS)
++        CanPreempt = oldpreempt;
++
++    return ret;
+ }
+ 
+ // romlayout.S
+diff --git a/src/post.c b/src/post.c
+index d98941c..6f7aa14 100644
+--- a/src/post.c
++++ b/src/post.c
+@@ -210,6 +210,9 @@ startBoot(void)
+ static void
+ maininit(void)
+ {
++    // Running at new code address - do code relocation fixups
++    malloc_fixupreloc();
++
+     // Setup ivt/bda/ebda
+     init_ivt();
+     init_bda();
+diff --git a/src/romlayout.S b/src/romlayout.S
+index fbc5cb3..5983a4a 100644
+--- a/src/romlayout.S
++++ b/src/romlayout.S
+@@ -264,8 +264,10 @@ entry_pmm:
+         pushw %ds
+         movw %ss, %cx           // Move %ss to %ds
+         movw %cx, %ds
+-        leal 28(%esp), %eax     // %eax points to start of args
+-        calll handle_pmm
++        movl $_cfunc32flat_handle_pmm, %eax // Setup: call32(handle_pmm, args, -1)
++        leal 28(%esp), %edx     // %edx points to start of args
++        movl $-1, %ecx
++        calll call32
+         movw %ax, 12(%esp)      // Modify %ax:%dx to return %eax
+         shrl $16, %eax
+         movw %ax, 4(%esp)
+diff --git a/src/stacks.c b/src/stacks.c
+index 17495d5..17f1a4a 100644
+--- a/src/stacks.c
++++ b/src/stacks.c
+@@ -32,7 +32,7 @@ static inline void lgdt(struct descloc_s *desc) {
+ }
+ 
+ // Call a 32bit SeaBIOS function from a 16bit SeaBIOS function.
+-u32
++u32 VISIBLE16
+ call32(void *func, u32 eax, u32 errret)
+ {
+     ASSERT16();
+diff --git a/src/util.h b/src/util.h
+index 5cdb483..174e94b 100644
+--- a/src/util.h
++++ b/src/util.h
+@@ -226,6 +226,7 @@ int get_keystroke(int msec);
+ u32 call32(void *func, u32 eax, u32 errret);
+ inline u32 stack_hop(u32 eax, u32 edx, void *func);
+ extern struct thread_info MainThread;
++extern int CanPreempt;
+ struct thread_info *getCurThread(void);
+ void yield(void);
+ void wait_irq(void);
+@@ -415,6 +416,7 @@ void pnp_setup(void);
+ // pmm.c
+ extern struct zone_s ZoneLow, ZoneHigh, ZoneFSeg, ZoneTmpLow, ZoneTmpHigh;
+ void malloc_setup(void);
++void malloc_fixupreloc(void);
+ void malloc_finalize(void);
+ void *pmm_malloc(struct zone_s *zone, u32 handle, u32 size, u32 align);
+ int pmm_free(void *data);
+-- 
+1.7.5.4
+

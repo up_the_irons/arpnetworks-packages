@@ -1,0 +1,428 @@
+From 278b19f49bc5f62380322f5d2f375a9fceb42a1b Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Tue, 21 Jun 2011 22:41:15 -0400
+Subject: [PATCH 34/91] Convert pci_init_device to use 'struct pci_device'.
+
+---
+ src/acpi.c    |   16 +++++++-------
+ src/ata.c     |   13 ++++++-----
+ src/pci.c     |   33 +++++++++++++-----------------
+ src/pci.h     |    8 ++++--
+ src/pciinit.c |   61 ++++++++++++++++++++++++++++++++------------------------
+ src/shadow.c  |   10 ++++----
+ src/smm.c     |    6 ++--
+ 7 files changed, 77 insertions(+), 70 deletions(-)
+
+diff --git a/src/acpi.c b/src/acpi.c
+index 584e557..fc7867a 100644
+--- a/src/acpi.c
++++ b/src/acpi.c
+@@ -217,7 +217,7 @@ build_header(struct acpi_table_header *h, u32 sig, int len, u8 rev)
+ #define PIIX4_GPE0_BLK          0xafe0
+ #define PIIX4_GPE0_BLK_LEN      4
+ 
+-static void piix4_fadt_init(u16 bdf, void *arg)
++static void piix4_fadt_init(struct pci_device *pci, void *arg)
+ {
+     struct fadt_descriptor_rev1 *fadt = arg;
+     fadt->acpi_enable = PIIX4_ACPI_ENABLE;
+@@ -234,8 +234,8 @@ static const struct pci_device_id fadt_init_tbl[] = {
+     PCI_DEVICE_END
+ };
+ 
+-static void*
+-build_fadt(int bdf)
++static void *
++build_fadt(struct pci_device *pci)
+ {
+     struct fadt_descriptor_rev1 *fadt = malloc_high(sizeof(*fadt));
+     struct facs_descriptor_rev1 *facs = memalign_high(64, sizeof(*facs));
+@@ -260,7 +260,7 @@ build_fadt(int bdf)
+     fadt->dsdt = cpu_to_le32((u32)dsdt);
+     fadt->model = 1;
+     fadt->reserved1 = 0;
+-    int pm_sci_int = pci_config_readb(bdf, PCI_INTERRUPT_LINE);
++    int pm_sci_int = pci_config_readb(pci->bdf, PCI_INTERRUPT_LINE);
+     fadt->sci_int = cpu_to_le16(pm_sci_int);
+     fadt->smi_cmd = cpu_to_le32(PORT_SMI_CMD);
+     fadt->pm1a_evt_blk = cpu_to_le32(PORT_ACPI_PM_BASE);
+@@ -271,7 +271,7 @@ build_fadt(int bdf)
+     fadt->pm_tmr_len = 4;
+     fadt->plvl2_lat = cpu_to_le16(0xfff); // C2 state not supported
+     fadt->plvl3_lat = cpu_to_le16(0xfff); // C3 state not supported
+-    pci_init_device(fadt_init_tbl, bdf, fadt);
++    pci_init_device(fadt_init_tbl, pci, fadt);
+     /* WBINVD + PROC_C1 + SLP_BUTTON + FIX_RTC + RTC_S4 */
+     fadt->flags = cpu_to_le32((1 << 0) | (1 << 2) | (1 << 5) | (1 << 6) | (1 << 7));
+ 
+@@ -611,8 +611,8 @@ acpi_bios_init(void)
+     dprintf(3, "init ACPI tables\n");
+ 
+     // This code is hardcoded for PIIX4 Power Management device.
+-    int bdf = pci_find_init_device(acpi_find_tbl, NULL);
+-    if (bdf < 0)
++    struct pci_device *pci = pci_find_init_device(acpi_find_tbl, NULL);
++    if (!pci)
+         // Device not found
+         return;
+ 
+@@ -633,7 +633,7 @@ acpi_bios_init(void)
+     } while(0)
+ 
+     // Add tables
+-    ACPI_INIT_TABLE(build_fadt(bdf));
++    ACPI_INIT_TABLE(build_fadt(pci));
+     ACPI_INIT_TABLE(build_ssdt());
+     ACPI_INIT_TABLE(build_madt());
+     ACPI_INIT_TABLE(build_hpet());
+diff --git a/src/ata.c b/src/ata.c
+index e07aabe..a6b5067 100644
+--- a/src/ata.c
++++ b/src/ata.c
+@@ -965,8 +965,9 @@ init_controller(int bdf, int irq, u32 port1, u32 port2, u32 master)
+ 
+ // Handle controllers on an ATA PCI device.
+ static void
+-init_pciata(u16 bdf, u8 prog_if)
++init_pciata(struct pci_device *pci, u8 prog_if)
+ {
++    u16 bdf = pci->bdf;
+     u8 pciirq = pci_config_readb(bdf, PCI_INTERRUPT_LINE);
+     int master = 0;
+     if (CONFIG_ATA_DMA && prog_if & 0x80) {
+@@ -1007,18 +1008,18 @@ init_pciata(u16 bdf, u8 prog_if)
+ }
+ 
+ static void
+-found_genericata(u16 bdf, void *arg)
++found_genericata(struct pci_device *pci, void *arg)
+ {
+-    init_pciata(bdf, pci_config_readb(bdf, PCI_CLASS_PROG));
++    init_pciata(pci, pci->prog_if);
+ }
+ 
+ static void
+-found_compatibleahci(u16 bdf, void *arg)
++found_compatibleahci(struct pci_device *pci, void *arg)
+ {
+     if (CONFIG_AHCI)
+         // Already handled directly via native ahci interface.
+         return;
+-    init_pciata(bdf, 0x8f);
++    init_pciata(pci, 0x8f);
+ }
+ 
+ static const struct pci_device_id pci_ata_tbl[] = {
+@@ -1045,7 +1046,7 @@ ata_init(void)
+     // Scan PCI bus for ATA adapters
+     struct pci_device *pci;
+     foreachpci(pci) {
+-        pci_init_device(pci_ata_tbl, pci->bdf, NULL);
++        pci_init_device(pci_ata_tbl, pci, NULL);
+     }
+ }
+ 
+diff --git a/src/pci.c b/src/pci.c
+index eaf434a..78bbac2 100644
+--- a/src/pci.c
++++ b/src/pci.c
+@@ -190,19 +190,15 @@ pci_find_class(u16 classid)
+     return -1;
+ }
+ 
+-int pci_init_device(const struct pci_device_id *ids, u16 bdf, void *arg)
++int pci_init_device(const struct pci_device_id *ids
++                    , struct pci_device *pci, void *arg)
+ {
+-    u16 vendor_id = pci_config_readw(bdf, PCI_VENDOR_ID);
+-    u16 device_id = pci_config_readw(bdf, PCI_DEVICE_ID);
+-    u16 class = pci_config_readw(bdf, PCI_CLASS_DEVICE);
+-
+     while (ids->vendid || ids->class_mask) {
+-        if ((ids->vendid == PCI_ANY_ID || ids->vendid == vendor_id) &&
+-            (ids->devid == PCI_ANY_ID || ids->devid == device_id) &&
+-            !((ids->class ^ class) & ids->class_mask)) {
+-            if (ids->func) {
+-                ids->func(bdf, arg);
+-            }
++        if ((ids->vendid == PCI_ANY_ID || ids->vendid == pci->vendor) &&
++            (ids->devid == PCI_ANY_ID || ids->devid == pci->device) &&
++            !((ids->class ^ pci->class) & ids->class_mask)) {
++            if (ids->func)
++                ids->func(pci, arg);
+             return 0;
+         }
+         ids++;
+@@ -210,16 +206,15 @@ int pci_init_device(const struct pci_device_id *ids, u16 bdf, void *arg)
+     return -1;
+ }
+ 
+-int pci_find_init_device(const struct pci_device_id *ids, void *arg)
++struct pci_device *
++pci_find_init_device(const struct pci_device_id *ids, void *arg)
+ {
+-    int bdf, max;
+-
+-    foreachbdf(bdf, max) {
+-        if (pci_init_device(ids, bdf, arg) == 0) {
+-            return bdf;
+-        }
++    struct pci_device *pci;
++    foreachpci(pci) {
++        if (pci_init_device(ids, pci, arg) == 0)
++            return pci;
+     }
+-    return -1;
++    return NULL;
+ }
+ 
+ void
+diff --git a/src/pci.h b/src/pci.h
+index 70339cd..f1e3988 100644
+--- a/src/pci.h
++++ b/src/pci.h
+@@ -78,7 +78,7 @@ struct pci_device_id {
+     u32 devid;
+     u32 class;
+     u32 class_mask;
+-    void (*func)(u16 bdf, void *arg);
++    void (*func)(struct pci_device *pci, void *arg);
+ };
+ 
+ #define PCI_DEVICE(vendor_id, device_id, init_func)     \
+@@ -104,8 +104,10 @@ struct pci_device_id {
+         .vendid = 0,                            \
+     }
+ 
+-int pci_init_device(const struct pci_device_id *table, u16 bdf, void *arg);
+-int pci_find_init_device(const struct pci_device_id *ids, void *arg);
++int pci_init_device(const struct pci_device_id *ids
++                    , struct pci_device *pci, void *arg);
++struct pci_device *pci_find_init_device(const struct pci_device_id *ids
++                                        , void *arg);
+ void pci_reboot(void);
+ 
+ // helper functions to access pci mmio bars from real mode
+diff --git a/src/pciinit.c b/src/pciinit.c
+index efb9187..bfff3db 100644
+--- a/src/pciinit.c
++++ b/src/pciinit.c
+@@ -114,11 +114,11 @@ static int pci_bios_allocate_region(u16 bdf, int region_num)
+     return is_64bit;
+ }
+ 
+-static void pci_bios_allocate_regions(u16 bdf, void *arg)
++static void pci_bios_allocate_regions(struct pci_device *pci, void *arg)
+ {
+     int i;
+     for (i = 0; i < PCI_NUM_REGIONS; i++) {
+-        int is_64bit = pci_bios_allocate_region(bdf, i);
++        int is_64bit = pci_bios_allocate_region(pci->bdf, i);
+         if (is_64bit){
+             i++;
+         }
+@@ -135,7 +135,7 @@ static int pci_slot_get_pirq(u16 bdf, int irq_num)
+ }
+ 
+ /* PIIX3/PIIX4 PCI to ISA bridge */
+-static void piix_isa_bridge_init(u16 bdf, void *arg)
++static void piix_isa_bridge_init(struct pci_device *pci, void *arg)
+ {
+     int i, irq;
+     u8 elcr[2];
+@@ -147,7 +147,7 @@ static void piix_isa_bridge_init(u16 bdf, void *arg)
+         /* set to trigger level */
+         elcr[irq >> 3] |= (1 << (irq & 7));
+         /* activate irq remapping in PIIX */
+-        pci_config_writeb(bdf, 0x60 + i, irq);
++        pci_config_writeb(pci->bdf, 0x60 + i, irq);
+     }
+     outb(elcr[0], 0x4d0);
+     outb(elcr[1], 0x4d1);
+@@ -171,8 +171,9 @@ static const struct pci_device_id pci_isa_bridge_tbl[] = {
+ #define PCI_PREF_MEMORY_ALIGN   (1UL << 20)
+ #define PCI_PREF_MEMORY_SHIFT   16
+ 
+-static void pci_bios_init_device_bridge(u16 bdf, void *arg)
++static void pci_bios_init_device_bridge(struct pci_device *pci, void *arg)
+ {
++    u16 bdf = pci->bdf;
+     pci_bios_allocate_region(bdf, 0);
+     pci_bios_allocate_region(bdf, 1);
+     pci_bios_allocate_region(bdf, PCI_ROM_SLOT);
+@@ -255,8 +256,9 @@ static void pci_bios_init_device_bridge(u16 bdf, void *arg)
+     pci_config_maskw(bdf, PCI_BRIDGE_CONTROL, 0, PCI_BRIDGE_CTL_SERR);
+ }
+ 
+-static void storage_ide_init(u16 bdf, void *arg)
++static void storage_ide_init(struct pci_device *pci, void *arg)
+ {
++    u16 bdf = pci->bdf;
+     /* IDE: we map it as in ISA mode */
+     pci_set_io_region_addr(bdf, 0, PORT_ATA1_CMD_BASE);
+     pci_set_io_region_addr(bdf, 1, PORT_ATA1_CTRL_BASE);
+@@ -265,23 +267,24 @@ static void storage_ide_init(u16 bdf, void *arg)
+ }
+ 
+ /* PIIX3/PIIX4 IDE */
+-static void piix_ide_init(u16 bdf, void *arg)
++static void piix_ide_init(struct pci_device *pci, void *arg)
+ {
++    u16 bdf = pci->bdf;
+     pci_config_writew(bdf, 0x40, 0x8000); // enable IDE0
+     pci_config_writew(bdf, 0x42, 0x8000); // enable IDE1
+-    pci_bios_allocate_regions(bdf, NULL);
++    pci_bios_allocate_regions(pci, NULL);
+ }
+ 
+-static void pic_ibm_init(u16 bdf, void *arg)
++static void pic_ibm_init(struct pci_device *pci, void *arg)
+ {
+     /* PIC, IBM, MPIC & MPIC2 */
+-    pci_set_io_region_addr(bdf, 0, 0x80800000 + 0x00040000);
++    pci_set_io_region_addr(pci->bdf, 0, 0x80800000 + 0x00040000);
+ }
+ 
+-static void apple_macio_init(u16 bdf, void *arg)
++static void apple_macio_init(struct pci_device *pci, void *arg)
+ {
+     /* macio bridge */
+-    pci_set_io_region_addr(bdf, 0, 0x80800000);
++    pci_set_io_region_addr(pci->bdf, 0, 0x80800000);
+ }
+ 
+ static const struct pci_device_id pci_class_tbl[] = {
+@@ -314,8 +317,9 @@ static const struct pci_device_id pci_class_tbl[] = {
+ };
+ 
+ /* PIIX4 Power Management device (for ACPI) */
+-static void piix4_pm_init(u16 bdf, void *arg)
++static void piix4_pm_init(struct pci_device *pci, void *arg)
+ {
++    u16 bdf = pci->bdf;
+     // acpi sci is hardwired to 9
+     pci_config_writeb(bdf, PCI_INTERRUPT_LINE, 9);
+ 
+@@ -333,15 +337,15 @@ static const struct pci_device_id pci_device_tbl[] = {
+     PCI_DEVICE_END,
+ };
+ 
+-static void pci_bios_init_device(u16 bdf)
++static void pci_bios_init_device(struct pci_device *pci)
+ {
+-    int pin, pic_irq, vendor_id, device_id;
++    u16 bdf = pci->bdf;
++    int pin, pic_irq;
+ 
+-    vendor_id = pci_config_readw(bdf, PCI_VENDOR_ID);
+-    device_id = pci_config_readw(bdf, PCI_DEVICE_ID);
+     dprintf(1, "PCI: bus=%d devfn=0x%02x: vendor_id=0x%04x device_id=0x%04x\n"
+-            , pci_bdf_to_bus(bdf), pci_bdf_to_devfn(bdf), vendor_id, device_id);
+-    pci_init_device(pci_class_tbl, bdf, NULL);
++            , pci_bdf_to_bus(bdf), pci_bdf_to_devfn(bdf)
++            , pci->vendor, pci->device);
++    pci_init_device(pci_class_tbl, pci, NULL);
+ 
+     /* enable memory mappings */
+     pci_config_maskw(bdf, PCI_COMMAND, 0, PCI_COMMAND_IO | PCI_COMMAND_MEMORY);
+@@ -354,14 +358,19 @@ static void pci_bios_init_device(u16 bdf)
+         pci_config_writeb(bdf, PCI_INTERRUPT_LINE, pic_irq);
+     }
+ 
+-    pci_init_device(pci_device_tbl, bdf, NULL);
++    pci_init_device(pci_device_tbl, pci, NULL);
+ }
+ 
+ static void pci_bios_init_device_in_bus(int bus)
+ {
+-    int bdf, max;
+-    foreachbdf_in_bus(bdf, max, bus) {
+-        pci_bios_init_device(bdf);
++    struct pci_device *pci;
++    foreachpci(pci) {
++        u8 pci_bus = pci_bdf_to_bus(pci->bdf);
++        if (pci_bus < bus)
++            continue;
++        if (pci_bus > bus)
++            break;
++        pci_bios_init_device(pci);
+     }
+ }
+ 
+@@ -454,9 +463,9 @@ pci_setup(void)
+ 
+     pci_probe();
+ 
+-    int bdf, max;
+-    foreachbdf(bdf, max) {
+-        pci_init_device(pci_isa_bridge_tbl, bdf, NULL);
++    struct pci_device *pci;
++    foreachpci(pci) {
++        pci_init_device(pci_isa_bridge_tbl, pci, NULL);
+     }
+     pci_bios_init_device_in_bus(0 /* host bus */);
+ }
+diff --git a/src/shadow.c b/src/shadow.c
+index 68c9230..ece7d97 100644
+--- a/src/shadow.c
++++ b/src/shadow.c
+@@ -95,9 +95,9 @@ make_bios_readonly_intel(u16 bdf, u32 pam0)
+     pci_config_writeb(bdf, pam0, 0x10);
+ }
+ 
+-static void i440fx_bios_make_readonly(u16 bdf, void *arg)
++static void i440fx_bios_make_readonly(struct pci_device *pci, void *arg)
+ {
+-    make_bios_readonly_intel(bdf, I440FX_PAM0);
++    make_bios_readonly_intel(pci->bdf, I440FX_PAM0);
+ }
+ 
+ static const struct pci_device_id dram_controller_make_readonly_tbl[] = {
+@@ -138,10 +138,10 @@ make_bios_readonly(void)
+         return;
+ 
+     dprintf(3, "locking shadow ram\n");
+-    int bdf = pci_find_init_device(dram_controller_make_readonly_tbl, NULL);
+-    if (bdf < 0) {
++    struct pci_device *pci = pci_find_init_device(
++        dram_controller_make_readonly_tbl, NULL);
++    if (!pci)
+         dprintf(1, "Unable to lock ram - bridge not found\n");
+-    }
+ }
+ 
+ void
+diff --git a/src/smm.c b/src/smm.c
+index 9db02d7..9f14cec 100644
+--- a/src/smm.c
++++ b/src/smm.c
+@@ -110,7 +110,7 @@ smm_relocate_and_restore(void)
+ #define PIIX_APMC_EN    (1 << 25)
+ 
+ // This code is hardcoded for PIIX4 Power Management device.
+-static void piix4_apmc_smm_init(u16 bdf, void *arg)
++static void piix4_apmc_smm_init(struct pci_device *pci, void *arg)
+ {
+     int i440_bdf = pci_find_device(PCI_VENDOR_ID_INTEL
+                                    , PCI_DEVICE_ID_INTEL_82441);
+@@ -118,7 +118,7 @@ static void piix4_apmc_smm_init(u16 bdf, void *arg)
+         return;
+ 
+     /* check if SMM init is already done */
+-    u32 value = pci_config_readl(bdf, PIIX_DEVACTB);
++    u32 value = pci_config_readl(pci->bdf, PIIX_DEVACTB);
+     if (value & PIIX_APMC_EN)
+         return;
+ 
+@@ -128,7 +128,7 @@ static void piix4_apmc_smm_init(u16 bdf, void *arg)
+     smm_save_and_copy();
+ 
+     /* enable SMI generation when writing to the APMC register */
+-    pci_config_writel(bdf, PIIX_DEVACTB, value | PIIX_APMC_EN);
++    pci_config_writel(pci->bdf, PIIX_DEVACTB, value | PIIX_APMC_EN);
+ 
+     smm_relocate_and_restore();
+ 
+-- 
+1.7.5.4
+

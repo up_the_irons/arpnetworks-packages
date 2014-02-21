@@ -1,0 +1,54 @@
+From 37956dd856719de5be0ca60645cad03e300b60b7 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Tue, 21 Jun 2011 22:22:58 -0400
+Subject: [PATCH 33/91] Move pci_probe() call into pciinit() code.
+
+Call pci_probe after pci bridge setup and before pci device setup.
+This will allow the pci device setup to use 'struct pci_device'.
+---
+ src/pciinit.c |    8 ++++++--
+ src/post.c    |    1 -
+ 2 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/src/pciinit.c b/src/pciinit.c
+index 6bd8390..efb9187 100644
+--- a/src/pciinit.c
++++ b/src/pciinit.c
+@@ -436,9 +436,11 @@ pci_bios_init_bus(void)
+ void
+ pci_setup(void)
+ {
+-    if (CONFIG_COREBOOT || usingXen())
+-        // Already done by coreboot or Xen.
++    if (CONFIG_COREBOOT || usingXen()) {
++        // PCI setup already done by coreboot or Xen - just do probe.
++        pci_probe();
+         return;
++    }
+ 
+     dprintf(3, "pci setup\n");
+ 
+@@ -450,6 +452,8 @@ pci_setup(void)
+ 
+     pci_bios_init_bus();
+ 
++    pci_probe();
++
+     int bdf, max;
+     foreachbdf(bdf, max) {
+         pci_init_device(pci_isa_bridge_tbl, bdf, NULL);
+diff --git a/src/post.c b/src/post.c
+index 7618b17..813ff20 100644
+--- a/src/post.c
++++ b/src/post.c
+@@ -224,7 +224,6 @@ maininit(void)
+ 
+     // Initialize pci
+     pci_setup();
+-    pci_probe();
+     smm_init();
+ 
+     // Initialize internal tables
+-- 
+1.7.5.4
+

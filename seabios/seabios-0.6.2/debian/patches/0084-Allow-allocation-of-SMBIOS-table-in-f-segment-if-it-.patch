@@ -1,0 +1,59 @@
+From 32f03876f4528cc74fde2624e2b5a1c756929453 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Wed, 3 Aug 2011 20:45:32 -0400
+Subject: [PATCH 84/91] Allow allocation of SMBIOS table in f-segment if it is
+ small.
+
+If the SMBIOS is small (less than 600 bytes) allow it to be allocated
+in the f-segment.  This works around a bug in JunOS - it crashes on
+SMBIOS tables located in high memory.
+---
+ src/config.h |    2 ++
+ src/smbios.c |   11 +++++++++--
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/src/config.h b/src/config.h
+index f2fce89..d182b13 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -51,6 +51,8 @@
+ #define BUILD_SMM_ADDR            0xa8000
+ #define BUILD_SMM_SIZE            0x8000
+ 
++#define BUILD_MAX_SMBIOS_FSEG     600
++
+ // Important real-mode segments
+ #define SEG_IVT      0x0000
+ #define SEG_BDA      0x0040
+diff --git a/src/smbios.c b/src/smbios.c
+index 8df0f2d..7db8cce 100644
+--- a/src/smbios.c
++++ b/src/smbios.c
+@@ -17,7 +17,13 @@ smbios_entry_point_init(u16 max_structure_size,
+                         u16 number_of_structures)
+ {
+     struct smbios_entry_point *ep = malloc_fseg(sizeof(*ep));
+-    void *finaltable = malloc_high(structure_table_length);
++    void *finaltable;
++    if (structure_table_length <= BUILD_MAX_SMBIOS_FSEG)
++        // Table is small enough for f-seg - allocate there.  This
++        // works around a bug in JunOS (at least for small SMBIOS tables).
++        finaltable = malloc_fseg(structure_table_length);
++    else
++        finaltable = malloc_high(structure_table_length);
+     if (!ep || !finaltable) {
+         warn_noalloc();
+         free(ep);
+@@ -44,7 +50,8 @@ smbios_entry_point_init(u16 max_structure_size,
+ 
+     ep->intermediate_checksum -= checksum((void*)ep + 0x10, ep->length - 0x10);
+ 
+-    dprintf(1, "SMBIOS ptr=%p table=%p\n", ep, finaltable);
++    dprintf(1, "SMBIOS ptr=%p table=%p size=%d\n"
++            , ep, finaltable, structure_table_length);
+ }
+ 
+ #define load_str_field_with_default(type, field, def)                   \
+-- 
+1.7.5.4
+

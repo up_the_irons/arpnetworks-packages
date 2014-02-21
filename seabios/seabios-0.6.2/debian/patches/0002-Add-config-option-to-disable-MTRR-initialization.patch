@@ -1,0 +1,45 @@
+From 424f217fe01ed7e2398d9e56a2803f86856cdc06 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sun, 6 Mar 2011 19:06:48 -0500
+Subject: [PATCH 02/91] Add config option to disable MTRR initialization.
+
+Some versions of Bochs don't like the MTRR initialization, so add
+CONFIG_MTRR_INIT to control whether SeaBIOS will touch the MTRRs.
+---
+ src/Kconfig |    6 ++++++
+ src/mtrr.c  |    2 +-
+ 2 files changed, 7 insertions(+), 1 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index fca73e4..f064b27 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -194,6 +194,12 @@ menu "Hardware support"
+         default y
+         help
+             Support System Management Mode (on emulators).
++    config MTRR_INIT
++        depends on !COREBOOT
++        bool "Initialize MTRRs"
++        default y
++        help
++            Initialize the Memory Type Range Registers (on emulators).
+ endmenu
+ 
+ menu "BIOS interfaces"
+diff --git a/src/mtrr.c b/src/mtrr.c
+index ed239c8..0502c18 100644
+--- a/src/mtrr.c
++++ b/src/mtrr.c
+@@ -32,7 +32,7 @@
+ 
+ void mtrr_setup(void)
+ {
+-    if (CONFIG_COREBOOT)
++    if (!CONFIG_MTRR_INIT || CONFIG_COREBOOT)
+         return;
+ 
+     u32 eax, ebx, ecx, edx, cpuid_features;
+-- 
+1.7.5.4
+

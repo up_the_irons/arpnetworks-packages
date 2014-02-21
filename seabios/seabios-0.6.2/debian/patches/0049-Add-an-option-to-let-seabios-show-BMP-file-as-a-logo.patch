@@ -1,0 +1,359 @@
+From 5042ca50f4dd808957d5550615e6c469147c9cf2 Mon Sep 17 00:00:00 2001
+From: Wayne Xia <xiawenc@linux.vnet.ibm.com>
+Date: Fri, 8 Jul 2011 11:02:09 +0800
+Subject: [PATCH 49/91] Add an option to let seabios show BMP file as a logo.
+
+Signed-off-by: Wayne Xia <xiawenc@linux.vnet.ibm.com>
+---
+ Makefile         |    4 +-
+ src/bmp.c        |  105 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/bmp.h        |   25 +++++++++++++
+ src/bootsplash.c |  105 ++++++++++++++++++++++++++++++++++++++++-------------
+ 4 files changed, 211 insertions(+), 28 deletions(-)
+ create mode 100644 src/bmp.c
+ create mode 100644 src/bmp.h
+
+diff --git a/Makefile b/Makefile
+index a96c89d..2786c9e 100644
+--- a/Makefile
++++ b/Makefile
+@@ -15,12 +15,12 @@ SRCBOTH=misc.c pmm.c stacks.c output.c util.c block.c floppy.c ata.c mouse.c \
+         kbd.c pci.c serial.c clock.c pic.c cdrom.c ps2port.c smp.c resume.c \
+         pnpbios.c pirtable.c vgahooks.c ramdisk.c pcibios.c blockcmd.c \
+         usb.c usb-uhci.c usb-ohci.c usb-ehci.c usb-hid.c usb-msc.c \
+-        virtio-ring.c virtio-pci.c virtio-blk.c apm.c ahci.c
++        virtio-ring.c virtio-pci.c virtio-blk.c apm.c ahci.c bmp.c
+ SRC16=$(SRCBOTH) system.c disk.c font.c
+ SRC32FLAT=$(SRCBOTH) post.c shadow.c memmap.c coreboot.c boot.c \
+       acpi.c smm.c mptable.c smbios.c pciinit.c optionroms.c mtrr.c \
+       lzmadecode.c bootsplash.c jpeg.c usb-hub.c paravirt.c \
+-      pci_region.c biostables.c xen.c
++      pci_region.c biostables.c xen.c bmp.c
+ SRC32SEG=util.c output.c pci.c pcibios.c apm.c stacks.c
+ 
+ cc-option = $(shell if test -z "`$(1) $(2) -S -o /dev/null -xc \
+diff --git a/src/bmp.c b/src/bmp.c
+new file mode 100644
+index 0000000..0d54efd
+--- /dev/null
++++ b/src/bmp.c
+@@ -0,0 +1,105 @@
++/*
++* Basic BMP data process and Raw picture data handle functions.
++* Could be used to adjust pixel data format, get infomation, etc.
++*
++* Copyright (C) 2011 Wayne Xia <xiawenc@cn.ibm.com>
++*
++* This work is licensed under the terms of the GNU LGPLv3.
++*/
++#include "util.h"
++#include "bmp.h"
++
++#define bmp_load4byte(addr) (*(u32 *)(addr))
++#define bmp_load2byte(addr) (*(u16 *)(addr))
++
++typedef struct tagBITMAPFILEHEADER {
++    u8 bfType[2];
++    u8 bfSize[4];
++    u8 bfReserved1[2];
++    u8 bfReserved2[2];
++    u8 bfOffBits[4];
++} BITMAPFILEHEADER, tagBITMAPFILEHEADER;
++
++typedef struct tagBITMAPINFOHEADER {
++    u8 biSize[4];
++    u8 biWidth[4];
++    u8 biHeight[4];
++    u8 biPlanes[2];
++    u8 biBitCount[2];
++    u8 biCompression[4];
++    u8 biSizeImage[4];
++    u8 biXPelsPerMeter[4];
++    u8 biYPelsPerMeter[4];
++    u8 biClrUsed[4];
++    u8 biClrImportant[4];
++} BITMAPINFOHEADER, tagBITMAPINFOHEADER;
++
++typedef struct tagRGBQUAD {
++    u8 rgbBlue;
++    u8 rgbGreen;
++    u8 rgbRed;
++    u8 rgbReserved;
++} RGBQUAD, tagRGBQUAD;
++
++/* flat picture data adjusting function
++* description:
++*   switch the vertical line sequence
++*   arrange horizontal pixel data, add extra space in the dest buffer
++*       for every line
++*/
++static void raw_data_format_adjust_24bpp(u8 *src, u8 *dest, int width,
++                                        int height, int bytes_per_line_dest)
++{
++    int bytes_per_line_src = 3 * width;
++    int i;
++    for (i = 0 ; i < height ; i++) {
++        memcpy(dest + i * bytes_per_line_dest,
++           src + (height - 1 - i) * bytes_per_line_src, bytes_per_line_src);
++    }
++}
++
++struct bmp_decdata *bmp_alloc(void)
++{
++    struct bmp_decdata *bmp = malloc_tmphigh(sizeof(*bmp));
++    return bmp;
++}
++
++int bmp_decode(struct bmp_decdata *bmp, unsigned char *data, int data_size)
++{
++    if (data_size < 54)
++        return 1;
++
++    u16 bmp_filehead = bmp_load2byte(data + 0);
++    if (bmp_filehead != 0x4d42)
++        return 2;
++    u32 bmp_recordsize = bmp_load4byte(data + 2);
++    if (bmp_recordsize != data_size)
++        return 3;
++    u32 bmp_dataoffset = bmp_load4byte(data + 10);
++    bmp->datap = (unsigned char *)data + bmp_dataoffset;
++    bmp->width = bmp_load4byte(data + 18);
++    bmp->height = bmp_load4byte(data + 22);
++    bmp->bpp = bmp_load2byte(data + 28);
++    return 0;
++}
++
++void bmp_get_size(struct bmp_decdata *bmp, int *width, int *height)
++{
++    *width = bmp->width;
++    *height = bmp->height;
++}
++
++
++int bmp_show(struct bmp_decdata *bmp, unsigned char *pic, int width
++             , int height, int depth, int bytes_per_line_dest)
++{
++    if (bmp->datap == pic)
++        return 0;
++    /* now only support 24bpp bmp file */
++    if ((depth == 24) && (bmp->bpp == 24)) {
++        raw_data_format_adjust_24bpp(bmp->datap, pic, width, height,
++                                        bytes_per_line_dest);
++        return 0;
++    }
++    return 1;
++}
+diff --git a/src/bmp.h b/src/bmp.h
+new file mode 100644
+index 0000000..7ae8e87
+--- /dev/null
++++ b/src/bmp.h
+@@ -0,0 +1,25 @@
++#ifndef BMP_H
++#define BMP_H
++#include "types.h"
++
++struct bmp_decdata {
++    struct tagRGBQUAD *quadp;
++    unsigned char *datap;
++    int width;
++    int height;
++    int bpp;
++};
++
++/* allocate decdata struct */
++struct bmp_decdata *bmp_alloc(void);
++
++/* extract information from bmp file data */
++int bmp_decode(struct bmp_decdata *bmp, unsigned char *data, int data_size);
++
++/* get bmp properties */
++void bmp_get_size(struct bmp_decdata *bmp, int *width, int *height);
++
++/* flush flat picture data to *pc */
++int bmp_show(struct bmp_decdata *bmp, unsigned char *pic, int width
++             , int height, int depth, int bytes_per_line_dest);
++#endif
+diff --git a/src/bootsplash.c b/src/bootsplash.c
+index cf1a603..51f4f4f 100644
+--- a/src/bootsplash.c
++++ b/src/bootsplash.c
+@@ -12,7 +12,7 @@
+ #include "jpeg.h" // splash
+ #include "biosvar.h" // SET_EBDA
+ #include "paravirt.h" // romfile_find
+-
++#include "bmp.h"
+ 
+ /****************************************************************
+  * VESA structures
+@@ -109,7 +109,7 @@ enable_vga_console(void)
+ 
+ static int
+ find_videomode(struct vesa_info *vesa_info, struct vesa_mode_info *mode_info
+-               , int width, int height)
++               , int width, int height, int bpp_req)
+ {
+     dprintf(3, "Finding vesa mode with dimensions %d/%d\n", width, height);
+     u16 *videomodes = SEGOFF_TO_FLATPTR(vesa_info->video_mode_ptr);
+@@ -135,8 +135,13 @@ find_videomode(struct vesa_info *vesa_info, struct vesa_mode_info *mode_info
+             || mode_info->y_resolution != height)
+             continue;
+         u8 depth = mode_info->bits_per_pixel;
+-        if (depth != 16 && depth != 24 && depth != 32)
+-            continue;
++        if (bpp_req == 0) {
++            if (depth != 16 && depth != 24 && depth != 32)
++                continue;
++        } else {
++            if (depth != bpp_req)
++                continue;
++        }
+         return videomode;
+     }
+ }
+@@ -148,17 +153,25 @@ enable_bootsplash(void)
+ {
+     if (!CONFIG_BOOTSPLASH)
+         return;
++    /* splash picture can be bmp or jpeg file */
+     dprintf(3, "Checking for bootsplash\n");
++    u8 type = 0; /* 0 means jpg, 1 means bmp, default is 0=jpg */
+     int filesize;
+     u8 *filedata = romfile_loadfile("bootsplash.jpg", &filesize);
+-    if (!filedata)
+-        return;
++    if (!filedata) {
++        filedata = romfile_loadfile("bootsplash.bmp", &filesize);
++        if (!filedata)
++            return;
++        type = 1;
++    }
++    dprintf(3, "start showing bootsplash\n");
+ 
+-    u8 *picture = NULL;
++    u8 *picture = NULL; /* data buff used to be flushed to the video buf */
++    struct jpeg_decdata *jpeg = NULL;
++    struct bmp_decdata *bmp = NULL;
+     struct vesa_info *vesa_info = malloc_tmplow(sizeof(*vesa_info));
+     struct vesa_mode_info *mode_info = malloc_tmplow(sizeof(*mode_info));
+-    struct jpeg_decdata *jpeg = jpeg_alloc();
+-    if (!jpeg || !vesa_info || !mode_info) {
++    if (!vesa_info || !mode_info) {
+         warn_noalloc();
+         goto done;
+     }
+@@ -184,20 +197,48 @@ enable_bootsplash(void)
+             vesa_info->vesa_version>>8, vesa_info->vesa_version&0xff,
+             vendor, product);
+ 
+-    // Parse jpeg and get image size.
+-    dprintf(5, "Decoding bootsplash.jpg\n");
+-    int ret = jpeg_decode(jpeg, filedata);
+-    if (ret) {
+-        dprintf(1, "jpeg_decode failed with return code %d...\n", ret);
+-        goto done;
++    int ret, width, height;
++    int bpp_require = 0;
++    if (type == 0) {
++        jpeg = jpeg_alloc();
++        if (!jpeg) {
++            warn_noalloc();
++            goto done;
++        }
++        /* Parse jpeg and get image size. */
++        dprintf(5, "Decoding bootsplash.jpg\n");
++        ret = jpeg_decode(jpeg, filedata);
++        if (ret) {
++            dprintf(1, "jpeg_decode failed with return code %d...\n", ret);
++            goto done;
++        }
++        jpeg_get_size(jpeg, &width, &height);
++    } else {
++        bmp = bmp_alloc();
++        if (!bmp) {
++            warn_noalloc();
++            goto done;
++        }
++        /* Parse bmp and get image size. */
++        dprintf(5, "Decoding bootsplash.bmp\n");
++        ret = bmp_decode(bmp, filedata, filesize);
++        if (ret) {
++            dprintf(1, "bmp_decode failed with return code %d...\n", ret);
++            goto done;
++        }
++        bmp_get_size(bmp, &width, &height);
++        bpp_require = 24;
+     }
+-    int width, height;
+-    jpeg_get_size(jpeg, &width, &height);
++    /* jpeg would use 16 or 24 bpp video mode, BMP use 24bpp mode only */
+ 
+     // Try to find a graphics mode with the corresponding dimensions.
+-    int videomode = find_videomode(vesa_info, mode_info, width, height);
+-    if (videomode < 0)
++    int videomode = find_videomode(vesa_info, mode_info, width, height,
++                                       bpp_require);
++    if (videomode < 0) {
++        dprintf(1, "failed to find a videomode with %dx%d %dbpp (0=any).\n",
++                    width, height, bpp_require);
+         goto done;
++    }
+     void *framebuffer = mode_info->phys_base_ptr;
+     int depth = mode_info->bits_per_pixel;
+     dprintf(3, "mode: %04x\n", videomode);
+@@ -206,17 +247,28 @@ enable_bootsplash(void)
+     dprintf(3, "bits per pixel: %d\n", depth);
+ 
+     // Allocate space for image and decompress it.
+-    int imagesize = width * height * (depth / 8);
++    int imagesize = height * mode_info->bytes_per_scanline;
+     picture = malloc_tmphigh(imagesize);
+     if (!picture) {
+         warn_noalloc();
+         goto done;
+     }
+-    dprintf(5, "Decompressing bootsplash.jpg\n");
+-    ret = jpeg_show(jpeg, picture, width, height, depth);
+-    if (ret) {
+-        dprintf(1, "jpeg_show failed with return code %d...\n", ret);
+-        goto done;
++
++    if (type == 0) {
++        dprintf(5, "Decompressing bootsplash.jpg\n");
++        ret = jpeg_show(jpeg, picture, width, height, depth);
++        if (ret) {
++            dprintf(1, "jpeg_show failed with return code %d...\n", ret);
++            goto done;
++        }
++    } else {
++        dprintf(5, "Decompressing bootsplash.bmp\n");
++        ret = bmp_show(bmp, picture, width, height, depth,
++                           mode_info->bytes_per_scanline);
++        if (ret) {
++            dprintf(1, "bmp_show failed with return code %d...\n", ret);
++            goto done;
++        }
+     }
+ 
+     /* Switch to graphics mode */
+@@ -231,7 +283,7 @@ enable_bootsplash(void)
+     }
+ 
+     /* Show the picture */
+-    dprintf(5, "Showing bootsplash.jpg\n");
++    dprintf(5, "Showing bootsplash picture\n");
+     iomemcpy(framebuffer, picture, imagesize);
+     dprintf(5, "Bootsplash copy complete\n");
+     BootsplashActive = 1;
+@@ -242,6 +294,7 @@ done:
+     free(vesa_info);
+     free(mode_info);
+     free(jpeg);
++    free(bmp);
+     return;
+ }
+ 
+-- 
+1.7.5.4
+

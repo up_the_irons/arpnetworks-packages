@@ -1,0 +1,144 @@
+From 95b2e0c530c784251f4f4493dfffe947a6036c92 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sat, 9 Jul 2011 14:42:11 -0400
+Subject: [PATCH 56/91] Push use of 'struct pci_device' to
+ bootprio_find_ata_device().
+
+Signed-off-by: Kevin O'Connor <kevin@koconnor.net>
+---
+ src/ata.c  |   20 +++++++++++---------
+ src/ata.h  |    1 +
+ src/boot.c |    6 +++---
+ src/boot.h |    2 +-
+ 4 files changed, 16 insertions(+), 13 deletions(-)
+
+diff --git a/src/ata.c b/src/ata.c
+index 79bc76f..76e4f20 100644
+--- a/src/ata.c
++++ b/src/ata.c
+@@ -776,7 +776,7 @@ init_drive_atapi(struct atadrive_s *dummy, u16 *buffer)
+ 
+     // fill cdidmap
+     if (iscd) {
+-        int prio = bootprio_find_ata_device(adrive_g->chan_gf->pci_bdf,
++        int prio = bootprio_find_ata_device(adrive_g->chan_gf->pci_tmp,
+                                             adrive_g->chan_gf->chanid,
+                                             adrive_g->slave);
+         boot_add_cd(&adrive_g->drive, desc, prio);
+@@ -826,7 +826,7 @@ init_drive_ata(struct atadrive_s *dummy, u16 *buffer)
+                           , (u32)adjsize, adjprefix);
+     dprintf(1, "%s\n", desc);
+ 
+-    int prio = bootprio_find_ata_device(adrive_g->chan_gf->pci_bdf,
++    int prio = bootprio_find_ata_device(adrive_g->chan_gf->pci_tmp,
+                                         adrive_g->chan_gf->chanid,
+                                         adrive_g->slave);
+     // Register with bcv system.
+@@ -941,7 +941,8 @@ ata_detect(void *data)
+ 
+ // Initialize an ata controller and detect its drives.
+ static void
+-init_controller(int bdf, int irq, u32 port1, u32 port2, u32 master)
++init_controller(struct pci_device *pci, int irq
++                , u32 port1, u32 port2, u32 master)
+ {
+     static int chanid = 0;
+     struct ata_channel_s *chan_gf = malloc_fseg(sizeof(*chan_gf));
+@@ -951,12 +952,13 @@ init_controller(int bdf, int irq, u32 port1, u32 port2, u32 master)
+     }
+     chan_gf->chanid = chanid++;
+     chan_gf->irq = irq;
+-    chan_gf->pci_bdf = bdf;
++    chan_gf->pci_bdf = pci ? pci->bdf : -1;
++    chan_gf->pci_tmp = pci;
+     chan_gf->iobase1 = port1;
+     chan_gf->iobase2 = port2;
+     chan_gf->iomaster = master;
+     dprintf(1, "ATA controller %d at %x/%x/%x (irq %d dev %x)\n"
+-            , chanid, port1, port2, master, irq, bdf);
++            , chanid, port1, port2, master, irq, chan_gf->pci_bdf);
+     run_thread(ata_detect, chan_gf);
+ }
+ 
+@@ -992,7 +994,7 @@ init_pciata(struct pci_device *pci, u8 prog_if)
+         port2 = PORT_ATA1_CTRL_BASE;
+         irq = IRQ_ATA1;
+     }
+-    init_controller(bdf, irq, port1, port2, master);
++    init_controller(pci, irq, port1, port2, master);
+ 
+     if (prog_if & 4) {
+         port1 = (pci_config_readl(bdf, PCI_BASE_ADDRESS_2)
+@@ -1005,7 +1007,7 @@ init_pciata(struct pci_device *pci, u8 prog_if)
+         port2 = PORT_ATA2_CTRL_BASE;
+         irq = IRQ_ATA2;
+     }
+-    init_controller(bdf, irq, port1, port2, master ? master + 8 : 0);
++    init_controller(pci, irq, port1, port2, master ? master + 8 : 0);
+ }
+ 
+ static void
+@@ -1037,9 +1039,9 @@ ata_init(void)
+     if (!CONFIG_COREBOOT && !PCIDevices) {
+         // No PCI devices found - probably a QEMU "-M isapc" machine.
+         // Try using ISA ports for ATA controllers.
+-        init_controller(-1, IRQ_ATA1
++        init_controller(NULL, IRQ_ATA1
+                         , PORT_ATA1_CMD_BASE, PORT_ATA1_CTRL_BASE, 0);
+-        init_controller(-1, IRQ_ATA2
++        init_controller(NULL, IRQ_ATA2
+                         , PORT_ATA2_CMD_BASE, PORT_ATA2_CTRL_BASE, 0);
+         return;
+     }
+diff --git a/src/ata.h b/src/ata.h
+index 8fa2872..cfc6108 100644
+--- a/src/ata.h
++++ b/src/ata.h
+@@ -12,6 +12,7 @@ struct ata_channel_s {
+     u8  irq;
+     u8  chanid;
+     int pci_bdf;
++    struct pci_device *pci_tmp;
+ };
+ 
+ struct atadrive_s {
+diff --git a/src/boot.c b/src/boot.c
+index f769339..3fda39a 100644
+--- a/src/boot.c
++++ b/src/boot.c
+@@ -141,16 +141,16 @@ int bootprio_find_pci_device(struct pci_device *pci)
+     return find_prio(desc);
+ }
+ 
+-int bootprio_find_ata_device(int bdf, int chanid, int slave)
++int bootprio_find_ata_device(struct pci_device *pci, int chanid, int slave)
+ {
+     if (!CONFIG_BOOTORDER)
+         return -1;
+-    if (bdf == -1)
++    if (!pci)
+         // support only pci machine for now
+         return -1;
+     // Find ata drive - for example: /pci@i0cf8/ide@1,1/drive@1/disk@0
+     char desc[256], *p;
+-    p = build_pci_path(desc, sizeof(desc), "*", find_pci(bdf));
++    p = build_pci_path(desc, sizeof(desc), "*", pci);
+     snprintf(p, desc+sizeof(desc)-p, "/drive@%x/disk@%x", chanid, slave);
+     return find_prio(desc);
+ }
+diff --git a/src/boot.h b/src/boot.h
+index ae8ff89..78d4f3b 100644
+--- a/src/boot.h
++++ b/src/boot.h
+@@ -14,7 +14,7 @@ void boot_add_cbfs(void *data, const char *desc, int prio);
+ void boot_prep(void);
+ struct pci_device;
+ int bootprio_find_pci_device(struct pci_device *pci);
+-int bootprio_find_ata_device(int bdf, int chanid, int slave);
++int bootprio_find_ata_device(struct pci_device *pci, int chanid, int slave);
+ int bootprio_find_fdc_device(struct pci_device *pci, int port, int fdid);
+ int bootprio_find_pci_rom(int bdf, int instance);
+ int bootprio_find_named_rom(const char *name, int instance);
+-- 
+1.7.5.4
+

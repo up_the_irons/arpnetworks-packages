@@ -1,0 +1,33 @@
+From ee2bc468cbc741abe191a70dc8393083aa7ab9c0 Mon Sep 17 00:00:00 2001
+From: Ian Campbell <ian.campbell@citrix.com>
+Date: Tue, 14 Jun 2011 15:22:09 +0100
+Subject: [PATCH 17/91] Correct fseg allocation for SMBIOS tables.
+
+Anthony Perard noticed that grub was unhappy because it sees no low memory and
+that his e820 table was missing the first entry. He then pointed out this
+rather glaring error in the allocation of space for the SMBIOS tables.
+
+I've no idea why I didn't see this failure.
+
+Signed-off-by: Ian Campbell <ian.campbell@citrix.com>
+Tested-by: Anthony Perard <anthony.perard@citrix.com>
+---
+ src/biostables.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/src/biostables.c b/src/biostables.c
+index 761b260..d8b5067 100644
+--- a/src/biostables.c
++++ b/src/biostables.c
+@@ -95,7 +95,7 @@ copy_smbios(void *pos)
+         return;
+     if (checksum(pos+0x10, p->length-0x10) != 0)
+         return;
+-    struct smbios_entry_point *newpos = malloc_fseg(sizeof(p->length));
++    struct smbios_entry_point *newpos = malloc_fseg(p->length);
+     if (!newpos) {
+         warn_noalloc();
+         return;
+-- 
+1.7.5.4
+

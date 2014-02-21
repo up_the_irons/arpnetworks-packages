@@ -1,0 +1,67 @@
+From e010d85cdfab0f97eadb7b05af80dd60a591c602 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Tue, 5 Jul 2011 20:47:35 -0400
+Subject: [PATCH 45/91] Replace "CONFIG_OPTIONROMS_CHECKSUM" with
+ "etc/optionroms-checksum" file.
+
+---
+ src/Kconfig      |   11 -----------
+ src/optionroms.c |    6 +++++-
+ 2 files changed, 5 insertions(+), 12 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index 7a4d50a..3f63374 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -248,17 +248,6 @@ menu "BIOS interfaces"
+             Select this if option ROMs are already copied to
+             0xc0000-0xf0000.  This must only be selected when using
+             Bochs or QEMU versions older than 0.12.
+-    config OPTIONROMS_CHECKSUM
+-        depends on OPTIONROMS
+-        bool "Require correct checksum on option ROMs"
+-        default y
+-        help
+-            Option ROMs are required to have correct checksums.
+-            However, some option ROMs in the wild don't correctly
+-            follow the specifications and have bad checksums.
+-            Say N here to allow SeaBIOS to execute them anyways.
+-
+-            If unsure, say Y.
+     config PMM
+         depends on OPTIONROMS
+         bool "PMM interface"
+diff --git a/src/optionroms.c b/src/optionroms.c
+index b5a4297..3839497 100644
+--- a/src/optionroms.c
++++ b/src/optionroms.c
+@@ -116,6 +116,8 @@ call_bcv(u16 seg, u16 ip)
+     __callrom(MAKE_FLATPTR(seg, 0), ip, 0);
+ }
+ 
++static int EnforceChecksum;
++
+ // Verify that an option rom looks valid
+ static int
+ is_valid_rom(struct rom_header *rom)
+@@ -131,7 +133,7 @@ is_valid_rom(struct rom_header *rom)
+     if (sum != 0) {
+         dprintf(1, "Found option rom with bad checksum: loc=%p len=%d sum=%x\n"
+                 , rom, len, sum);
+-        if (CONFIG_OPTIONROMS_CHECKSUM)
++        if (EnforceChecksum)
+             return 0;
+     }
+     return 1;
+@@ -468,6 +470,8 @@ vga_setup(void)
+ 
+     dprintf(1, "Scan for VGA option rom\n");
+ 
++    EnforceChecksum = romfile_loadint("etc/optionroms-checksum", 1);
++
+     if (CONFIG_OPTIONROMS_DEPLOYED) {
+         // Option roms are already deployed on the system.
+         init_optionrom((void*)BUILD_ROM_START, 0, 1);
+-- 
+1.7.5.4
+

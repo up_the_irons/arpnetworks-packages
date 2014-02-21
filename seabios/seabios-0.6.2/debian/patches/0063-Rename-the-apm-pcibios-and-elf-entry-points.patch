@@ -1,0 +1,163 @@
+From 47c8e31d36fc79d694d430169c401297abd15440 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sun, 10 Jul 2011 22:57:32 -0400
+Subject: [PATCH 63/91] Rename the apm, pcibios, and elf entry points.
+
+Use a more consistent naming that matches entry_xxx to handle_xxx
+where possible.
+
+Signed-off-by: Kevin O'Connor <kevin@koconnor.net>
+---
+ src/apm.c          |    8 ++++----
+ src/pcibios.c      |    8 ++++----
+ src/romlayout.S    |   22 +++++++++++-----------
+ tools/layoutrom.py |    2 +-
+ 4 files changed, 20 insertions(+), 20 deletions(-)
+
+diff --git a/src/apm.c b/src/apm.c
+index 2029ae2..c497dbe 100644
+--- a/src/apm.c
++++ b/src/apm.c
+@@ -53,14 +53,14 @@ handle_155301(struct bregs *regs)
+ }
+ 
+ // Assembler entry points defined in romlayout.S
+-extern void apm16protected_entry(void);
+-extern void apm32protected_entry(void);
++extern void entry_apm16(void);
++extern void entry_apm32(void);
+ 
+ // APM 16 bit protected mode interface connect
+ static void
+ handle_155302(struct bregs *regs)
+ {
+-    regs->bx = (u32)apm16protected_entry;
++    regs->bx = (u32)entry_apm16;
+     regs->ax = SEG_BIOS; // 16 bit code segment base
+     regs->si = 0xfff0;   // 16 bit code segment size
+     regs->cx = SEG_BIOS; // data segment address
+@@ -73,7 +73,7 @@ static void
+ handle_155303(struct bregs *regs)
+ {
+     regs->ax = SEG_BIOS; // 32 bit code segment base
+-    regs->ebx = (u32)apm32protected_entry;
++    regs->ebx = (u32)entry_apm32;
+     regs->cx = SEG_BIOS; // 16 bit code segment base
+     // 32 bit code segment size (low 16 bits)
+     // 16 bit code segment size (high 16 bits)
+diff --git a/src/pcibios.c b/src/pcibios.c
+index 31ca37e..8b792fb 100644
+--- a/src/pcibios.c
++++ b/src/pcibios.c
+@@ -13,8 +13,8 @@
+ #include "pci_regs.h" // PCI_VENDOR_ID
+ 
+ // romlayout.S
+-extern void bios32_entry(void);
+-extern void pcibios32_entry(void);
++extern void entry_bios32(void);
++extern void entry_pcibios32(void);
+ 
+ #define RET_FUNC_NOT_SUPPORTED 0x81
+ #define RET_BAD_VENDOR_ID      0x83
+@@ -29,7 +29,7 @@ handle_1ab101(struct bregs *regs)
+     regs->bx = 0x0210; // PCI version 2.10
+     regs->cl = GET_GLOBAL(MaxPCIBus);
+     regs->edx = 0x20494350; // "PCI "
+-    regs->edi = (u32)pcibios32_entry + BUILD_BIOS_ADDR;
++    regs->edi = (u32)entry_pcibios32 + BUILD_BIOS_ADDR;
+     set_code_success(regs);
+ }
+ 
+@@ -232,6 +232,6 @@ bios32_setup(void)
+ {
+     dprintf(3, "init bios32\n");
+ 
+-    BIOS32HEADER.entry = (u32)bios32_entry;
++    BIOS32HEADER.entry = (u32)entry_bios32;
+     BIOS32HEADER.checksum -= checksum(&BIOS32HEADER, sizeof(BIOS32HEADER));
+ }
+diff --git a/src/romlayout.S b/src/romlayout.S
+index f5c36fc..fbc5cb3 100644
+--- a/src/romlayout.S
++++ b/src/romlayout.S
+@@ -311,8 +311,8 @@ entry_pnp_real:
+         lretw
+ 
+ // APM entry points
+-        DECLFUNC apm16protected_entry
+-apm16protected_entry:
++        DECLFUNC entry_apm16
++entry_apm16:
+         pushfw          // save flags
+         pushl %eax      // dummy
+         ENTRY_ARG handle_apm16
+@@ -321,8 +321,8 @@ apm16protected_entry:
+         lretw
+ 
+         .code32
+-        DECLFUNC apm32protected_entry
+-apm32protected_entry:
++        DECLFUNC entry_apm32
++entry_apm32:
+         pushfl
+         pushl %gs
+         pushl %cs               // Move second descriptor after %cs to %gs
+@@ -334,8 +334,8 @@ apm32protected_entry:
+         lretl
+ 
+ // PCI-BIOS 32bit entry point
+-        DECLFUNC pcibios32_entry
+-pcibios32_entry:
++        DECLFUNC entry_pcibios32
++entry_pcibios32:
+         pushfl
+         pushl %gs               // Backup %gs and set %gs=%ds
+         pushl %ds
+@@ -346,8 +346,8 @@ pcibios32_entry:
+         lretl
+ 
+ // BIOS32 support
+-        EXPORTFUNC bios32_entry
+-bios32_entry:
++        EXPORTFUNC entry_bios32
++entry_bios32:
+         pushfl
+ #if CONFIG_PCIBIOS
+         // Check for PCI-BIOS request
+@@ -355,7 +355,7 @@ bios32_entry:
+         jne 1f
+         movl $BUILD_BIOS_ADDR, %ebx
+         movl $BUILD_BIOS_SIZE, %ecx
+-        movl $pcibios32_entry, %edx
++        movl $entry_pcibios32, %edx
+         xorb %al, %al
+         jmp 2f
+ #endif
+@@ -366,8 +366,8 @@ bios32_entry:
+         lretl
+ 
+ // 32bit elf entry point
+-        EXPORTFUNC post32
+-post32:
++        EXPORTFUNC entry_elf
++entry_elf:
+         cli
+         cld
+         lidtl (BUILD_BIOS_ADDR + pmode_IDT_info)
+diff --git a/tools/layoutrom.py b/tools/layoutrom.py
+index d2ba674..45738a3 100755
+--- a/tools/layoutrom.py
++++ b/tools/layoutrom.py
+@@ -571,7 +571,7 @@ def main():
+     doLayout(sections)
+ 
+     # Write out linker script files.
+-    entrysym = info16[1]['post32']
++    entrysym = info16[1]['entry_elf']
+     genreloc = '_reloc_abs_start' in info32flat[1]
+     writeLinkerScripts(sections, entrysym, genreloc, out16, out32seg, out32flat)
+ 
+-- 
+1.7.5.4
+

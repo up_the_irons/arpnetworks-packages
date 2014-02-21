@@ -1,0 +1,146 @@
+From d7a7cf3a437faa6d56d5dbb060480601ef90799e Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 4 Aug 2011 19:36:27 +0200
+Subject: [PATCH 85/91] ahci/cdrom: shared bounce buffer
+
+This patch creates a common bounce buffer in block.c which
+is shared by the cdrom and ahci drivers.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+---
+ src/ahci.c  |    7 +++----
+ src/block.c |   14 ++++++++++++++
+ src/cdrom.c |   10 ++++------
+ src/disk.h  |    2 ++
+ 4 files changed, 23 insertions(+), 10 deletions(-)
+
+diff --git a/src/ahci.c b/src/ahci.c
+index 99bd0bb..9da1989 100644
+--- a/src/ahci.c
++++ b/src/ahci.c
+@@ -24,7 +24,6 @@
+ /****************************************************************
+  * these bits must run in both 16bit and 32bit modes
+  ****************************************************************/
+-u8 *ahci_buf_fl VAR16VISIBLE;
+ 
+ // prepare sata command fis
+ static void sata_prep_simple(struct sata_cmd_fis *fis, u8 command)
+@@ -269,7 +268,7 @@ ahci_disk_readwrite(struct disk_op_s *op, int iswrite)
+     // Use a word aligned buffer for AHCI I/O
+     int rc;
+     struct disk_op_s localop = *op;
+-    u8 *alignedbuf_fl = GET_GLOBAL(ahci_buf_fl);
++    u8 *alignedbuf_fl = GET_GLOBAL(bounce_buf_fl);
+     u8 *position = op->buf_fl;
+ 
+     localop.buf_fl = alignedbuf_fl;
+@@ -604,9 +603,9 @@ ahci_init_controller(struct pci_device *pci)
+         return;
+     }
+ 
+-    ahci_buf_fl = malloc_low(DISK_SECTOR_SIZE);
+-    if (!ahci_buf_fl) {
++    if (bounce_buf_init() < 0) {
+         warn_noalloc();
++        free(ctrl);
+         return;
+     }
+ 
+diff --git a/src/block.c b/src/block.c
+index 619db67..f7e7851 100644
+--- a/src/block.c
++++ b/src/block.c
+@@ -17,6 +17,7 @@
+ u8 FloppyCount VAR16VISIBLE;
+ u8 CDCount;
+ struct drive_s *IDMap[3][CONFIG_MAX_EXTDRIVE] VAR16VISIBLE;
++u8 *bounce_buf_fl VAR16VISIBLE;
+ 
+ struct drive_s *
+ getDrive(u8 exttype, u8 extdriveoffset)
+@@ -38,6 +39,19 @@ int getDriveId(u8 exttype, struct drive_s *drive_g)
+     return -1;
+ }
+ 
++int bounce_buf_init(void)
++{
++    if (bounce_buf_fl)
++        return 0;
++
++    u8 *buf = malloc_low(CDROM_SECTOR_SIZE);
++    if (!buf) {
++        warn_noalloc();
++        return -1;
++    }
++    bounce_buf_fl = buf;
++    return 0;
++}
+ 
+ /****************************************************************
+  * Disk geometry translation
+diff --git a/src/cdrom.c b/src/cdrom.c
+index 3769dfa..6351fec 100644
+--- a/src/cdrom.c
++++ b/src/cdrom.c
+@@ -18,7 +18,6 @@
+  ****************************************************************/
+ 
+ struct drive_s *cdemu_drive_gf VAR16VISIBLE;
+-u8 *cdemu_buf_fl VAR16VISIBLE;
+ 
+ static int
+ cdemu_read(struct disk_op_s *op)
+@@ -33,7 +32,7 @@ cdemu_read(struct disk_op_s *op)
+ 
+     int count = op->count;
+     op->count = 0;
+-    u8 *cdbuf_fl = GET_GLOBAL(cdemu_buf_fl);
++    u8 *cdbuf_fl = GET_GLOBAL(bounce_buf_fl);
+ 
+     if (op->lba & 3) {
+         // Partial read of first block.
+@@ -111,17 +110,16 @@ cdemu_setup(void)
+         return;
+     if (!CDCount)
+         return;
++    if (bounce_buf_init() < 0)
++        return;
+ 
+     struct drive_s *drive_g = malloc_fseg(sizeof(*drive_g));
+-    u8 *buf = malloc_low(CDROM_SECTOR_SIZE);
+-    if (!drive_g || !buf) {
++    if (!drive_g) {
+         warn_noalloc();
+         free(drive_g);
+-        free(buf);
+         return;
+     }
+     cdemu_drive_gf = drive_g;
+-    cdemu_buf_fl = buf;
+     memset(drive_g, 0, sizeof(*drive_g));
+     drive_g->type = DTYPE_CDEMU;
+     drive_g->blksize = DISK_SECTOR_SIZE;
+diff --git a/src/disk.h b/src/disk.h
+index 10a0051..ac33518 100644
+--- a/src/disk.h
++++ b/src/disk.h
+@@ -229,6 +229,7 @@ struct drive_s {
+ 
+ // block.c
+ extern u8 FloppyCount, CDCount;
++extern u8 *bounce_buf_fl;
+ struct drive_s *getDrive(u8 exttype, u8 extdriveoffset);
+ int getDriveId(u8 exttype, struct drive_s *drive_g);
+ void map_floppy_drive(struct drive_s *drive_g);
+@@ -236,6 +237,7 @@ void map_hd_drive(struct drive_s *drive_g);
+ void map_cd_drive(struct drive_s *drive_g);
+ int process_op(struct disk_op_s *op);
+ int send_disk_op(struct disk_op_s *op);
++int bounce_buf_init(void);
+ 
+ // floppy.c
+ extern struct floppy_ext_dbt_s diskette_param_table2;
+-- 
+1.7.5.4
+

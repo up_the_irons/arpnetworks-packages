@@ -1,0 +1,90 @@
+From 422263deac25e45301bd069b1a0d680db55a31d9 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Tue, 5 Jul 2011 20:56:07 -0400
+Subject: [PATCH 47/91] Replace CONFIG_SCREEN_AND_DEBUG with
+ "etc/screen-and-debug" file.
+
+---
+ src/Kconfig      |    8 --------
+ src/optionroms.c |    3 +++
+ src/output.c     |    4 ++--
+ src/util.h       |    1 +
+ 4 files changed, 6 insertions(+), 10 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index 06ab8c1..81acc1c 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -346,12 +346,4 @@ menu "Debugging"
+         default 0x3f8
+         help
+             Base port for serial - generally 0x3f8, 0x2f8, 0x3e8, or 0x2e8.
+-
+-    config SCREEN_AND_DEBUG
+-        depends on DEBUG_LEVEL != 0
+-        bool "Show screen writes on debug ports"
+-        default y
+-        help
+-            Send characters that SeaBIOS writes to the screen to the
+-            debug ports.
+ endmenu
+diff --git a/src/optionroms.c b/src/optionroms.c
+index 6c4c9ff..3d1a1e4 100644
+--- a/src/optionroms.c
++++ b/src/optionroms.c
+@@ -462,6 +462,7 @@ optionrom_setup(void)
+  ****************************************************************/
+ 
+ static int S3ResumeVgaInit;
++int ScreenAndDebug;
+ 
+ // Call into vga code to turn on console.
+ void
+@@ -472,8 +473,10 @@ vga_setup(void)
+ 
+     dprintf(1, "Scan for VGA option rom\n");
+ 
++    // Load some config settings that impact VGA.
+     EnforceChecksum = romfile_loadint("etc/optionroms-checksum", 1);
+     S3ResumeVgaInit = romfile_loadint("etc/s3-resume-vga-init", 0);
++    ScreenAndDebug = romfile_loadint("etc/screen-and-debug", 1);
+ 
+     if (CONFIG_OPTIONROMS_DEPLOYED) {
+         // Option roms are already deployed on the system.
+diff --git a/src/output.c b/src/output.c
+index 7c10d33..5c91ae5 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -115,7 +115,7 @@ screenc(char c)
+ static void
+ putc_screen(struct putcinfo *action, char c)
+ {
+-    if (CONFIG_SCREEN_AND_DEBUG)
++    if (ScreenAndDebug)
+         putc_debug(&debuginfo, c);
+     if (c == '\n')
+         screenc('\r');
+@@ -363,7 +363,7 @@ printf(const char *fmt, ...)
+     va_start(args, fmt);
+     bvprintf(&screeninfo, fmt, args);
+     va_end(args);
+-    if (CONFIG_SCREEN_AND_DEBUG)
++    if (ScreenAndDebug)
+         debug_serial_flush();
+ }
+ 
+diff --git a/src/util.h b/src/util.h
+index eecedac..303c524 100644
+--- a/src/util.h
++++ b/src/util.h
+@@ -416,6 +416,7 @@ void optionrom_setup(void);
+ void vga_setup(void);
+ void s3_resume_vga_init(void);
+ extern u32 RomEnd;
++extern int ScreenAndDebug;
+ 
+ // bootsplash.c
+ void enable_vga_console(void);
+-- 
+1.7.5.4
+

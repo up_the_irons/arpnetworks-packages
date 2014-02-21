@@ -1,0 +1,81 @@
+From dc3a7d6fdda28d4dde82a14166af50c643a755af Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sat, 9 Jul 2011 14:33:56 -0400
+Subject: [PATCH 54/91] Push use of 'struct pci_device' to
+ bootprio_find_pci_device().
+
+Signed-off-by: Kevin O'Connor <kevin@koconnor.net>
+---
+ src/boot.c       |    4 ++--
+ src/boot.h       |    2 +-
+ src/virtio-blk.c |    7 ++++---
+ 3 files changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/src/boot.c b/src/boot.c
+index 58fb70b..5c0e0bb 100644
+--- a/src/boot.c
++++ b/src/boot.c
+@@ -131,13 +131,13 @@ build_pci_path(char *buf, int max, const char *devname, struct pci_device *pci)
+     return p;
+ }
+ 
+-int bootprio_find_pci_device(int bdf)
++int bootprio_find_pci_device(struct pci_device *pci)
+ {
+     if (!CONFIG_BOOTORDER)
+         return -1;
+     // Find pci device - for example: /pci@i0cf8/ethernet@5
+     char desc[256];
+-    build_pci_path(desc, sizeof(desc), "*", find_pci(bdf));
++    build_pci_path(desc, sizeof(desc), "*", pci);
+     return find_prio(desc);
+ }
+ 
+diff --git a/src/boot.h b/src/boot.h
+index 6495002..92af9da 100644
+--- a/src/boot.h
++++ b/src/boot.h
+@@ -13,7 +13,7 @@ void boot_add_cd(struct drive_s *drive_g, const char *desc, int prio);
+ void boot_add_cbfs(void *data, const char *desc, int prio);
+ void boot_prep(void);
+ struct pci_device;
+-int bootprio_find_pci_device(int bdf);
++int bootprio_find_pci_device(struct pci_device *pci);
+ int bootprio_find_ata_device(int bdf, int chanid, int slave);
+ int bootprio_find_fdc_device(int bdf, int port, int fdid);
+ int bootprio_find_pci_rom(int bdf, int instance);
+diff --git a/src/virtio-blk.c b/src/virtio-blk.c
+index 4e3ef06..b1274fc 100644
+--- a/src/virtio-blk.c
++++ b/src/virtio-blk.c
+@@ -97,8 +97,9 @@ process_virtio_op(struct disk_op_s *op)
+ }
+ 
+ static void
+-init_virtio_blk(u16 bdf)
++init_virtio_blk(struct pci_device *pci)
+ {
++    u16 bdf = pci->bdf;
+     dprintf(1, "found virtio-blk at %x:%x\n", pci_bdf_to_bus(bdf),
+             pci_bdf_to_dev(bdf));
+     struct virtiodrive_s *vdrive_g = malloc_fseg(sizeof(*vdrive_g));
+@@ -153,7 +154,7 @@ init_virtio_blk(u16 bdf)
+     char *desc = znprintf(MAXDESCSIZE, "Virtio disk PCI:%x:%x",
+                           pci_bdf_to_bus(bdf), pci_bdf_to_dev(bdf));
+ 
+-    boot_add_hd(&vdrive_g->drive, desc, bootprio_find_pci_device(bdf));
++    boot_add_hd(&vdrive_g->drive, desc, bootprio_find_pci_device(pci));
+ 
+     vp_set_status(ioaddr, VIRTIO_CONFIG_S_ACKNOWLEDGE |
+                   VIRTIO_CONFIG_S_DRIVER | VIRTIO_CONFIG_S_DRIVER_OK);
+@@ -178,6 +179,6 @@ virtio_blk_setup(void)
+         if (pci->vendor != PCI_VENDOR_ID_REDHAT_QUMRANET
+             || pci->device != PCI_DEVICE_ID_VIRTIO_BLK)
+             continue;
+-        init_virtio_blk(pci->bdf);
++        init_virtio_blk(pci);
+     }
+ }
+-- 
+1.7.5.4
+

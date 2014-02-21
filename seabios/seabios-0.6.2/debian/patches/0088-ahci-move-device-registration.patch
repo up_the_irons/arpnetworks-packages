@@ -1,0 +1,93 @@
+From 2dcbf7fafc15acb62adbceaae7ca3a6e3a06f0e3 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 4 Aug 2011 19:36:30 +0200
+Subject: [PATCH 88/91] ahci: move device registration
+
+Stick description and boot priority into the port struct, so it
+holds everything needed to register the device, so we can do
+the registration after ahci_port_init returned.
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+---
+ src/ahci.c |   27 ++++++++++++++-------------
+ src/ahci.h |    2 ++
+ 2 files changed, 16 insertions(+), 13 deletions(-)
+
+diff --git a/src/ahci.c b/src/ahci.c
+index c1b436d..ecdd3cb 100644
+--- a/src/ahci.c
++++ b/src/ahci.c
+@@ -531,17 +531,13 @@ static int ahci_port_init(struct ahci_port_s *port)
+             adjsize >>= 10;
+             adjprefix = 'G';
+         }
+-        char *desc = znprintf(MAXDESCSIZE
++        port->desc = znprintf(MAXDESCSIZE
+                               , "AHCI/%d: %s ATA-%d Hard-Disk (%u %ciBytes)"
+                               , port->pnr
+                               , ata_extract_model(model, MAXMODEL, buffer)
+                               , ata_extract_version(buffer)
+                               , (u32)adjsize, adjprefix);
+-        dprintf(1, "%s\n", desc);
+-
+-        // Register with bcv system.
+-        int prio = bootprio_find_ata_device(ctrl->pci_tmp, pnr, 0);
+-        boot_add_hd(&port->drive, desc, prio);
++        port->prio = bootprio_find_ata_device(ctrl->pci_tmp, pnr, 0);
+     } else {
+         // found cdrom (atapi)
+         port->drive.blksize = CDROM_SECTOR_SIZE;
+@@ -551,16 +547,12 @@ static int ahci_port_init(struct ahci_port_s *port)
+             dprintf(1, "AHCI/%d: atapi device is'nt a cdrom\n", port->pnr);
+             return -1;
+         }
+-        char *desc = znprintf(MAXDESCSIZE
++        port->desc = znprintf(MAXDESCSIZE
+                               , "DVD/CD [AHCI/%d: %s ATAPI-%d DVD/CD]"
+                               , port->pnr
+                               , ata_extract_model(model, MAXMODEL, buffer)
+                               , ata_extract_version(buffer));
+-        dprintf(1, "%s\n", desc);
+-
+-        // fill cdidmap
+-        int prio = bootprio_find_ata_device(ctrl->pci_tmp, pnr, 0);
+-        boot_add_cd(&port->drive, desc, prio);
++        port->prio = bootprio_find_ata_device(ctrl->pci_tmp, pnr, 0);
+     }
+     return 0;
+ }
+@@ -577,8 +569,17 @@ ahci_port_detect(void *data)
+     rc = ahci_port_init(port);
+     if (rc < 0)
+         ahci_port_release(port);
+-    else
++    else {
+         ahci_port_realloc(port);
++        dprintf(1, "AHCI/%d: registering: \"%s\"\n", port->pnr, port->desc);
++        if (!port->atapi) {
++            // Register with bcv system.
++            boot_add_hd(&port->drive, port->desc, port->prio);
++        } else {
++            // fill cdidmap
++            boot_add_cd(&port->drive, port->desc, port->prio);
++        }
++    }
+ }
+ 
+ // Initialize an ata controller and detect its drives.
+diff --git a/src/ahci.h b/src/ahci.h
+index 98ade63..c3d3a70 100644
+--- a/src/ahci.h
++++ b/src/ahci.h
+@@ -75,6 +75,8 @@ struct ahci_port_s {
+     struct ahci_cmd_s  *cmd;
+     u32                pnr;
+     u32                atapi;
++    char               *desc;
++    int                prio;
+ };
+ 
+ void ahci_setup(void);
+-- 
+1.7.5.4
+

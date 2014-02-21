@@ -1,0 +1,76 @@
+From b044e77d531a48302e1b43b739cf4947dbf4f162 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Tue, 5 Jul 2011 20:40:11 -0400
+Subject: [PATCH 43/91] Replace CONFIG_EXTRA_PCI_ROOTS with dynamic
+ "etc/extra-pci-roots" file.
+
+---
+ src/Kconfig    |   11 -----------
+ src/paravirt.h |    1 +
+ src/pci.c      |    8 ++++----
+ 3 files changed, 5 insertions(+), 15 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index 0ffc49e..e732528 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -194,17 +194,6 @@ menu "Hardware support"
+         help
+             Support parallel ports. This also enables int 17 parallel port calls.
+ 
+-    config EXTRA_PCI_ROOTS
+-        int "Number of extra root buses"
+-        default 0
+-        help
+-            If the target machine has multiple independent root buses
+-            set this to a positive value.  The SeaBIOS PCI probe will
+-            then search for the given number of extra root buses.
+-
+-            Most machines do not have multiple root buses and this
+-            setting should be zero.
+-
+     config USE_SMM
+         depends on !COREBOOT
+         bool "System Management Mode (SMM)"
+diff --git a/src/paravirt.h b/src/paravirt.h
+index 83166f4..4a370a0 100644
+--- a/src/paravirt.h
++++ b/src/paravirt.h
+@@ -1,6 +1,7 @@
+ #ifndef __PV_H
+ #define __PV_H
+ 
++#include "config.h" // CONFIG_COREBOOT
+ #include "util.h"
+ 
+ /* This CPUID returns the signature 'KVMKVMKVM' in ebx, ecx, and edx.  It
+diff --git a/src/pci.c b/src/pci.c
+index 23a6878..49698ac 100644
+--- a/src/pci.c
++++ b/src/pci.c
+@@ -8,8 +8,8 @@
+ #include "pci.h" // pci_config_writel
+ #include "ioport.h" // outl
+ #include "util.h" // dprintf
+-#include "config.h" // CONFIG_*
+-#include "farptr.h" // CONFIG_*
++#include "paravirt.h" // romfile_loadint
++#include "farptr.h" // MAKE_FLATPTR
+ #include "pci_regs.h" // PCI_VENDOR_ID
+ #include "pci_ids.h" // PCI_CLASS_DISPLAY_VGA
+ 
+@@ -96,9 +96,9 @@ pci_probe(void)
+     struct pci_device *busdevs[256];
+     memset(busdevs, 0, sizeof(busdevs));
+     struct pci_device **pprev = &PCIDevices;
++    int extraroots = romfile_loadint("etc/extra-pci-roots", 0);
+     int bus = -1, lastbus = 0, rootbuses = 0, count=0;
+-    while (bus < 0xff && (bus < MaxPCIBus
+-                          || rootbuses < CONFIG_EXTRA_PCI_ROOTS)) {
++    while (bus < 0xff && (bus < MaxPCIBus || rootbuses < extraroots)) {
+         bus++;
+         int bdf;
+         foreachbdf(bdf, bus) {
+-- 
+1.7.5.4
+

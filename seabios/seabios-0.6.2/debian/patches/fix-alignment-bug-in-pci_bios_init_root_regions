@@ -1,0 +1,25 @@
+commit 3c5fcec00ce1317cda56d549259550fcc018c834
+Author: Kevin O'Connor <kevin@koconnor.net>
+Date:   Sat Oct 1 12:35:32 2011 -0400
+
+    Fix alignment bug in pci_bios_init_root_regions().
+    
+    If there are no memory allocations for a given type then the "max" bar
+    size is zero.  However, ALIGN_DOWN does not handle an alignment of
+    zero properly.  Catch and handle the zero case.
+    
+    Signed-off-by: Kevin O'Connor <kevin@koconnor.net>
+
+diff --git a/src/pciinit.c b/src/pciinit.c
+index a857da0..0d8758e 100644
+--- a/src/pciinit.c
++++ b/src/pciinit.c
+@@ -536,7 +536,7 @@ static void pci_bios_init_bus_bases(struct pci_bus *bus)
+     }
+ }
+ 
+-#define ROOT_BASE(top, sum, align) ALIGN_DOWN((top)-(sum),(align))
++#define ROOT_BASE(top, sum, max) ALIGN_DOWN((top)-(sum),(max) ?: 1)
+ 
+ static int pci_bios_init_root_regions(u32 start, u32 end)
+ {

@@ -1,0 +1,4 @@
+version=3
+
+http://linuxtogo.org/~kevin/SeaBIOS/seabios-(.*)\.tar\.gz \
+	debian uupdate

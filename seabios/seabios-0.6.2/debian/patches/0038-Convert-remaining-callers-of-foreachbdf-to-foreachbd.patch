@@ -1,0 +1,228 @@
+From 0f654a976b9ec8d0346249f8aacc5fbd7d40e946 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Sat, 2 Jul 2011 14:32:11 -0400
+Subject: [PATCH 38/91] Convert remaining callers of foreachbdf to
+ foreachbdf_in_bus.
+
+Convert the last few callers of foreachbdf to foreachbdf_in_bus.  This
+is in preparation for simplification of foreachbdf_in_bus.
+
+Also add in addition debugging messages to pci_probe.
+---
+ src/pci.c     |  110 ++++++++++++++++++++++++++++++++-------------------------
+ src/pcibios.c |   55 +++++++++++++++-------------
+ 2 files changed, 91 insertions(+), 74 deletions(-)
+
+diff --git a/src/pci.c b/src/pci.c
+index bbb58cf..ebc6f91 100644
+--- a/src/pci.c
++++ b/src/pci.c
+@@ -104,63 +104,77 @@ pci_next(int bdf, int *pmax)
+ }
+ 
+ struct pci_device *PCIDevices;
+-int MaxPCIBus;
++int MaxPCIBus VAR16VISIBLE;
+ 
++// Find all PCI devices and populate PCIDevices linked list.
+ void
+ pci_probe(void)
+ {
+-    int rootbuses = 0;
++    dprintf(3, "PCI probe\n");
++    if (CONFIG_PCI_ROOT1 && CONFIG_PCI_ROOT1 > MaxPCIBus)
++        MaxPCIBus = CONFIG_PCI_ROOT1;
++    if (CONFIG_PCI_ROOT2 && CONFIG_PCI_ROOT2 > MaxPCIBus)
++        MaxPCIBus = CONFIG_PCI_ROOT2;
++
+     struct pci_device *busdevs[256];
+     memset(busdevs, 0, sizeof(busdevs));
+-
+     struct pci_device **pprev = &PCIDevices;
+-    u8 lastbus = 0;
+-    int bdf, max;
+-    foreachbdf(bdf, max) {
+-        // Create new pci_device struct and add to list.
+-        struct pci_device *dev = malloc_tmp(sizeof(*dev));
+-        if (!dev) {
+-            warn_noalloc();
+-            return;
+-        }
+-        memset(dev, 0, sizeof(*dev));
+-        *pprev = dev;
+-        pprev = &dev->next;
++    int bus = -1, lastbus = 0, rootbuses = 0, count=0;
++    while (bus < MaxPCIBus) {
++        bus++;
++        int bdf, max;
++        foreachbdf_in_bus(bdf, max, bus) {
++            // Create new pci_device struct and add to list.
++            struct pci_device *dev = malloc_tmp(sizeof(*dev));
++            if (!dev) {
++                warn_noalloc();
++                return;
++            }
++            memset(dev, 0, sizeof(*dev));
++            *pprev = dev;
++            pprev = &dev->next;
++            count++;
+ 
+-        // Find parent device.
+-        u8 bus = pci_bdf_to_bus(bdf), rootbus;
+-        struct pci_device *parent = busdevs[bus];
+-        if (!parent) {
+-            if (bus != lastbus)
+-                rootbuses++;
+-            lastbus = bus;
+-            rootbus = rootbuses;
+-        } else {
+-            rootbus = parent->rootbus;
+-        }
+-        if (bus > MaxPCIBus)
+-            MaxPCIBus = bus;
++            // Find parent device.
++            int rootbus;
++            struct pci_device *parent = busdevs[bus];
++            if (!parent) {
++                if (bus != lastbus)
++                    rootbuses++;
++                lastbus = bus;
++                rootbus = rootbuses;
++            } else {
++                rootbus = parent->rootbus;
++            }
+ 
+-        // Populate pci_device info.
+-        dev->bdf = bdf;
+-        dev->parent = parent;
+-        dev->rootbus = rootbus;
+-        u32 vendev = pci_config_readl(bdf, PCI_VENDOR_ID);
+-        dev->vendor = vendev & 0xffff;
+-        dev->device = vendev >> 16;
+-        u32 classrev = pci_config_readl(bdf, PCI_CLASS_REVISION);
+-        dev->class = classrev >> 16;
+-        dev->prog_if = classrev >> 8;
+-        dev->revision = classrev & 0xff;
+-        dev->header_type = pci_config_readb(bdf, PCI_HEADER_TYPE);
+-        u8 v = dev->header_type & 0x7f;
+-        if (v == PCI_HEADER_TYPE_BRIDGE || v == PCI_HEADER_TYPE_CARDBUS) {
+-            u8 secbus = pci_config_readb(bdf, PCI_SECONDARY_BUS);
+-            dev->secondary_bus = secbus;
+-            if (secbus > bus && !busdevs[secbus])
+-                busdevs[secbus] = dev;
++            // Populate pci_device info.
++            dev->bdf = bdf;
++            dev->parent = parent;
++            dev->rootbus = rootbus;
++            u32 vendev = pci_config_readl(bdf, PCI_VENDOR_ID);
++            dev->vendor = vendev & 0xffff;
++            dev->device = vendev >> 16;
++            u32 classrev = pci_config_readl(bdf, PCI_CLASS_REVISION);
++            dev->class = classrev >> 16;
++            dev->prog_if = classrev >> 8;
++            dev->revision = classrev & 0xff;
++            dev->header_type = pci_config_readb(bdf, PCI_HEADER_TYPE);
++            u8 v = dev->header_type & 0x7f;
++            if (v == PCI_HEADER_TYPE_BRIDGE || v == PCI_HEADER_TYPE_CARDBUS) {
++                u8 secbus = pci_config_readb(bdf, PCI_SECONDARY_BUS);
++                dev->secondary_bus = secbus;
++                if (secbus > bus && !busdevs[secbus])
++                    busdevs[secbus] = dev;
++                if (secbus > MaxPCIBus)
++                    MaxPCIBus = secbus;
++            }
++            dprintf(4, "PCI device %02x:%02x.%x (vd=%04x:%04x c=%04x)\n"
++                    , pci_bdf_to_bus(bdf), pci_bdf_to_dev(bdf)
++                    , pci_bdf_to_fn(bdf)
++                    , dev->vendor, dev->device, dev->class);
+         }
+     }
++    dprintf(1, "Found %d PCI devices (max PCI bus is %02x)\n", count, MaxPCIBus);
+ }
+ 
+ // Search for a device with the specified vendor and device ids.
+diff --git a/src/pcibios.c b/src/pcibios.c
+index 4fdfd5e..ca91c15 100644
+--- a/src/pcibios.c
++++ b/src/pcibios.c
+@@ -25,14 +25,9 @@ extern void pcibios32_entry(void);
+ static void
+ handle_1ab101(struct bregs *regs)
+ {
+-    // Find max bus.
+-    int bdf, max;
+-    foreachbdf(bdf, max) {
+-    }
+-
+     regs->al = 0x01; // Flags - "Config Mechanism #1" supported.
+     regs->bx = 0x0210; // PCI version 2.10
+-    regs->cl = pci_bdf_to_bus(max - 1);
++    regs->cl = GET_GLOBAL(MaxPCIBus);
+     regs->edx = 0x20494350; // "PCI "
+     regs->edi = (u32)pcibios32_entry + BUILD_BIOS_ADDR;
+     set_code_success(regs);
+@@ -44,16 +39,20 @@ handle_1ab102(struct bregs *regs)
+ {
+     u32 id = (regs->cx << 16) | regs->dx;
+     int count = regs->si;
+-    int bdf, max;
+-    foreachbdf(bdf, max) {
+-        u32 v = pci_config_readl(bdf, PCI_VENDOR_ID);
+-        if (v != id)
+-            continue;
+-        if (count--)
+-            continue;
+-        regs->bx = bdf;
+-        set_code_success(regs);
+-        return;
++    int bus = -1;
++    while (bus < GET_GLOBAL(MaxPCIBus)) {
++        bus++;
++        int bdf, max;
++        foreachbdf_in_bus(bdf, max, bus) {
++            u32 v = pci_config_readl(bdf, PCI_VENDOR_ID);
++            if (v != id)
++                continue;
++            if (count--)
++                continue;
++            regs->bx = bdf;
++            set_code_success(regs);
++            return;
++        }
+     }
+     set_code_invalid(regs, RET_DEVICE_NOT_FOUND);
+ }
+@@ -64,16 +63,20 @@ handle_1ab103(struct bregs *regs)
+ {
+     int count = regs->si;
+     u32 classprog = regs->ecx;
+-    int bdf, max;
+-    foreachbdf(bdf, max) {
+-        u32 v = pci_config_readl(bdf, PCI_CLASS_REVISION);
+-        if ((v>>8) != classprog)
+-            continue;
+-        if (count--)
+-            continue;
+-        regs->bx = bdf;
+-        set_code_success(regs);
+-        return;
++    int bus = -1;
++    while (bus < GET_GLOBAL(MaxPCIBus)) {
++        bus++;
++        int bdf, max;
++        foreachbdf_in_bus(bdf, max, bus) {
++            u32 v = pci_config_readl(bdf, PCI_CLASS_REVISION);
++            if ((v>>8) != classprog)
++                continue;
++            if (count--)
++                continue;
++            regs->bx = bdf;
++            set_code_success(regs);
++            return;
++        }
+     }
+     set_code_invalid(regs, RET_DEVICE_NOT_FOUND);
+ }
+-- 
+1.7.5.4
+

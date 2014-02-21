@@ -1,0 +1,24 @@
+From 9b0fbd21755763589ad623c86253644e8c44f855 Mon Sep 17 00:00:00 2001
+From: Kevin O'Connor <kevin@koconnor.net>
+Date: Tue, 14 Jun 2011 22:20:45 -0400
+Subject: [PATCH 18/91] Only allow CONFIG_XEN when not CONFIG_COREBOOT.
+
+---
+ src/Kconfig |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index b9875c8..bbed963 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -11,6 +11,7 @@ menu "General Features"
+             Configure as a coreboot payload.
+ 
+     config XEN
++        depends on !COREBOOT
+         bool "Build for Xen HVM"
+         default n
+         help
+-- 
+1.7.5.4
+
