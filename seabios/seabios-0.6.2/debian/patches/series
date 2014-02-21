@@ -90,3 +90,4 @@
 0090-ahci-enable-by-default.patch
 0091-pci-re-add-isa-bridge-setup.patch
 fix-alignment-bug-in-pci_bios_init_root_regions
+1000-always-show-boot-menu-and-wait-20-seconds.patch

@@ -1,0 +1,20 @@
+diff --git a/src/boot.c b/src/boot.c
+index 119f290..22b8b8f 100644
+--- a/src/boot.c
++++ b/src/boot.c
+@@ -364,13 +364,13 @@ boot_add_cbfs(void *data, const char *desc, int prio)
+  * Boot menu and BCV execution
+  ****************************************************************/
+
+-#define DEFAULT_BOOTMENU_WAIT 2500
++#define DEFAULT_BOOTMENU_WAIT 20000
+
+ // Show IPL option menu.
+ static void
+ interactive_bootmenu(void)
+ {
+-    if (! CONFIG_BOOTMENU || ! qemu_cfg_show_boot_menu())
++    if (! CONFIG_BOOTMENU )
+         return;
+
+     while (get_keystroke(0) >= 0)

@@ -1,3 +1,11 @@
+seabios (0.6.2-0ubuntu2.2~ppa1) precise; urgency=low
+
+  * Provide more time to press F12 to select boot device.  Was a mere 2.5
+    seconds; now is a reasonable 20 seconds.
+  * Disregard QEMU config wrt boot menu
+
+ -- Garry Dolley <gdolley@arpnetworks.com>  Thu, 20 Feb 2014 16:20:22 -0800
+
 seabios (0.6.2-0ubuntu2.1) precise-proposed; urgency=low
 
   * Update maintainer
