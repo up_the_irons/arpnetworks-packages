@@ -1,0 +1,456 @@
+commit 8a34f822e6a618a3ad80c81d5f2c76d62faf2f29
+Author: Michal Privoznik <mprivozn@redhat.com>
+Date:   Wed Dec 21 18:58:29 2011 +0100
+
+    qemu: Keep list of USB devices attached to domains
+    
+    In order to avoid situation where a USB device is
+    in use by two domains, we must keep a list of already
+    attached devices like we do for PCI.
+
+Index: libvirt-0.9.8/src/libvirt_private.syms
+===================================================================
+--- libvirt-0.9.8.orig/src/libvirt_private.syms	2013-02-22 12:03:31.102286469 -0600
++++ libvirt-0.9.8/src/libvirt_private.syms	2013-02-22 12:03:31.090286470 -0600
+@@ -1058,6 +1058,17 @@ virThreadSelfID;
+ usbDeviceFileIterate;
+ usbDeviceGetBus;
+ usbDeviceGetDevno;
++usbDeviceGetName;
++usbDeviceGetUsedBy;
++usbDeviceListAdd;
++usbDeviceListCount;
++usbDeviceListDel;
++usbDeviceListFind;
++usbDeviceListFree;
++usbDeviceListGet;
++usbDeviceListNew;
++usbDeviceListSteal;
++usbDeviceSetUsedBy;
+ usbFindDevice;
+ usbFreeDevice;
+ usbGetDevice;
+Index: libvirt-0.9.8/src/qemu/qemu_conf.h
+===================================================================
+--- libvirt-0.9.8.orig/src/qemu/qemu_conf.h	2013-02-22 12:03:31.102286469 -0600
++++ libvirt-0.9.8/src/qemu/qemu_conf.h	2013-02-22 12:03:31.090286470 -0600
+@@ -36,6 +36,7 @@
+ # include "security/security_manager.h"
+ # include "cgroup.h"
+ # include "pci.h"
++# include "hostusb.h"
+ # include "cpu_conf.h"
+ # include "driver.h"
+ # include "bitmap.h"
+@@ -124,6 +125,7 @@ struct qemud_driver {
+     bool autoStartBypassCache;
+ 
+     pciDeviceList *activePciHostdevs;
++    usbDeviceList *activeUsbHostdevs;
+ 
+     virBitmapPtr reservedVNCPorts;
+ 
+Index: libvirt-0.9.8/src/qemu/qemu_driver.c
+===================================================================
+--- libvirt-0.9.8.orig/src/qemu/qemu_driver.c	2013-02-22 12:03:31.102286469 -0600
++++ libvirt-0.9.8/src/qemu/qemu_driver.c	2013-02-22 12:03:31.094286470 -0600
+@@ -584,6 +584,9 @@ qemudStartup(int privileged) {
+     if ((qemu_driver->activePciHostdevs = pciDeviceListNew()) == NULL)
+         goto error;
+ 
++    if ((qemu_driver->activeUsbHostdevs = usbDeviceListNew()) == NULL)
++        goto error;
++
+     if (privileged) {
+         if (chown(qemu_driver->libDir, qemu_driver->user, qemu_driver->group) < 0) {
+             virReportSystemError(errno,
+@@ -774,6 +777,7 @@ qemudShutdown(void) {
+ 
+     qemuDriverLock(qemu_driver);
+     pciDeviceListFree(qemu_driver->activePciHostdevs);
++    usbDeviceListFree(qemu_driver->activeUsbHostdevs);
+     virCapabilitiesFree(qemu_driver->caps);
+ 
+     virDomainObjListDeinit(&qemu_driver->domains);
+Index: libvirt-0.9.8/src/qemu/qemu_hostdev.c
+===================================================================
+--- libvirt-0.9.8.orig/src/qemu/qemu_hostdev.c	2013-02-22 12:03:31.102286469 -0600
++++ libvirt-0.9.8/src/qemu/qemu_hostdev.c	2013-02-22 12:03:31.094286470 -0600
+@@ -314,13 +314,30 @@ qemuPrepareHostPCIDevices(struct qemud_d
+ }
+ 
+ 
+-static int
+-qemuPrepareHostUSBDevices(struct qemud_driver *driver ATTRIBUTE_UNUSED,
+-                          virDomainDefPtr def)
++int
++qemuPrepareHostdevUSBDevices(struct qemud_driver *driver,
++                             const char *name,
++                             virDomainHostdevDefPtr *hostdevs,
++                             int nhostdevs)
+ {
++    int ret = -1;
+     int i;
+-    for (i = 0 ; i < def->nhostdevs ; i++) {
+-        virDomainHostdevDefPtr hostdev = def->hostdevs[i];
++    usbDeviceList *list;
++    usbDevice *tmp;
++
++    /* To prevent situation where USB device is assigned to two domains
++     * we need to keep a list of currently assigned USB devices.
++     * This is done in several loops which cannot be joined into one big
++     * loop. See qemuPrepareHostdevPCIDevices()
++     */
++    if (!(list = usbDeviceListNew()))
++        goto cleanup;
++
++    /* Loop 1: build temporary list and validate no usb device
++     * is already taken
++     */
++    for (i = 0 ; i < nhostdevs ; i++) {
++        virDomainHostdevDefPtr hostdev = hostdevs[i];
+ 
+         if (hostdev->mode != VIR_DOMAIN_HOSTDEV_MODE_SUBSYS)
+             continue;
+@@ -339,13 +356,74 @@ qemuPrepareHostUSBDevices(struct qemud_d
+             hostdev->source.subsys.u.usb.bus = usbDeviceGetBus(usb);
+             hostdev->source.subsys.u.usb.device = usbDeviceGetDevno(usb);
+ 
+-            usbFreeDevice(usb);
++            if ((tmp = usbDeviceListFind(driver->activeUsbHostdevs, usb))) {
++                const char *other_name = usbDeviceGetUsedBy(tmp);
++
++                if (other_name)
++                    qemuReportError(VIR_ERR_OPERATION_INVALID,
++                                    _("USB device %s is in use by domain %s"),
++                                    usbDeviceGetName(tmp), other_name);
++                else
++                    qemuReportError(VIR_ERR_OPERATION_INVALID,
++                                    _("USB device %s is already in use"),
++                                    usbDeviceGetName(tmp));
++                usbFreeDevice(usb);
++                goto cleanup;
++            }
++
++            if (usbDeviceListAdd(list, usb) < 0) {
++                usbFreeDevice(usb);
++                goto cleanup;
++            }
++
+         }
+     }
+ 
+-    return 0;
++    /* Loop 2: Mark devices in temporary list as used by @name
++     * and add them do driver list. However, if something goes
++     * wrong, perform rollback.
++     */
++    for (i = 0; i < usbDeviceListCount(list); i++) {
++        tmp = usbDeviceListGet(list, i);
++        usbDeviceSetUsedBy(tmp, name);
++        if (usbDeviceListAdd(driver->activeUsbHostdevs, tmp) < 0) {
++            usbFreeDevice(tmp);
++            goto inactivedevs;
++        }
++    }
++
++    /* Loop 3: Temporary list was successfully merged with
++     * driver list, so steal all items to avoid freeing them
++     * in cleanup label.
++     */
++    while (usbDeviceListCount(list) > 0) {
++        tmp = usbDeviceListGet(list, 0);
++        usbDeviceListSteal(list, tmp);
++    }
++
++    ret = 0;
++    goto cleanup;
++
++inactivedevs:
++    /* Steal devices from driver->activeUsbHostdevs.
++     * We will free them later.
++     */
++    for (i = 0; i < usbDeviceListCount(list); i++) {
++        tmp = usbDeviceListGet(list, i);
++        usbDeviceListSteal(driver->activeUsbHostdevs, tmp);
++    }
++
++cleanup:
++    usbDeviceListFree(list);
++    return ret;
+ }
+ 
++static int
++qemuPrepareHostUSBDevices(struct qemud_driver *driver,
++                          virDomainDefPtr def)
++{
++    return qemuPrepareHostdevUSBDevices(driver, def->name, def->hostdevs, def->nhostdevs);
++}
+ 
+ int qemuPrepareHostDevices(struct qemud_driver *driver,
+                            virDomainDefPtr def)
+Index: libvirt-0.9.8/src/qemu/qemu_hostdev.h
+===================================================================
+--- libvirt-0.9.8.orig/src/qemu/qemu_hostdev.h	2013-02-22 12:03:31.102286469 -0600
++++ libvirt-0.9.8/src/qemu/qemu_hostdev.h	2013-02-22 12:03:31.094286470 -0600
+@@ -33,6 +33,10 @@ int qemuPrepareHostdevPCIDevices(struct
+                                  const char *name,
+                                  virDomainHostdevDefPtr *hostdevs,
+                                  int nhostdevs);
++int qemuPrepareHostdevUSBDevices(struct qemud_driver *driver,
++                                 const char *name,
++                                 virDomainHostdevDefPtr *hostdevs,
++                                 int nhostdevs);
+ int qemuPrepareHostDevices(struct qemud_driver *driver,
+                            virDomainDefPtr def);
+ void qemuReattachPciDevice(pciDevice *dev, struct qemud_driver *driver);
+Index: libvirt-0.9.8/src/qemu/qemu_hotplug.c
+===================================================================
+--- libvirt-0.9.8.orig/src/qemu/qemu_hotplug.c	2013-02-22 12:03:31.102286469 -0600
++++ libvirt-0.9.8/src/qemu/qemu_hotplug.c	2013-02-22 12:03:31.098286470 -0600
+@@ -1097,6 +1097,9 @@ int qemuDomainAttachHostDevice(struct qe
+     /* Resolve USB product/vendor to bus/device */
+     if (hostdev->source.subsys.type == VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_USB &&
+         hostdev->source.subsys.u.usb.vendor) {
++        if (qemuPrepareHostdevUSBDevices(driver, vm->def->name, &hostdev, 1) < 0)
++            goto error;
++
+         usbDevice *usb
+             = usbFindDevice(hostdev->source.subsys.u.usb.vendor,
+                             hostdev->source.subsys.u.usb.product);
+@@ -2060,6 +2063,7 @@ int qemuDomainDetachHostUsbDevice(struct
+ {
+     virDomainHostdevDefPtr detach = NULL;
+     qemuDomainObjPrivatePtr priv = vm->privateData;
++    usbDevice *usb;
+     int i, ret;
+ 
+     for (i = 0 ; i < vm->def->nhostdevs ; i++) {
+@@ -2115,6 +2119,17 @@ int qemuDomainDetachHostUsbDevice(struct
+     if (ret < 0)
+         return -1;
+ 
++    usb = usbGetDevice(detach->source.subsys.u.usb.bus,
++                       detach->source.subsys.u.usb.device);
++    if (usb) {
++        usbDeviceListDel(driver->activeUsbHostdevs, usb);
++        usbFreeDevice(usb);
++    } else {
++        VIR_WARN("Unable to find device %03d.%03d in list of used USB devices",
++                 detach->source.subsys.u.usb.bus,
++                 detach->source.subsys.u.usb.device);
++    }
++
+     if (vm->def->nhostdevs > 1) {
+         memmove(vm->def->hostdevs + i,
+                 vm->def->hostdevs + i + 1,
+Index: libvirt-0.9.8/src/util/hostusb.c
+===================================================================
+--- libvirt-0.9.8.orig/src/util/hostusb.c	2013-02-22 12:03:31.102286469 -0600
++++ libvirt-0.9.8/src/util/hostusb.c	2013-02-22 12:03:31.098286470 -0600
+@@ -49,6 +49,12 @@ struct _usbDevice {
+     char          name[USB_ADDR_LEN]; /* domain:bus:slot.function */
+     char          id[USB_ID_LEN];     /* product vendor */
+     char          *path;
++    const char    *used_by;           /* name of the domain using this dev */
++};
++
++struct _usbDeviceList {
++    unsigned int count;
++    usbDevice **devs;
+ };
+ 
+ /* For virReportOOMError()  and virReportSystemError() */
+@@ -225,6 +231,22 @@ usbFreeDevice(usbDevice *dev)
+ }
+ 
+ 
++void usbDeviceSetUsedBy(usbDevice *dev,
++                        const char *name)
++{
++    dev->used_by = name;
++}
++
++const char * usbDeviceGetUsedBy(usbDevice *dev)
++{
++    return dev->used_by;
++}
++
++const char *usbDeviceGetName(usbDevice *dev)
++{
++    return dev->name;
++}
++
+ unsigned usbDeviceGetBus(usbDevice *dev)
+ {
+     return dev->bus;
+@@ -243,3 +265,121 @@ int usbDeviceFileIterate(usbDevice *dev,
+ {
+     return (actor)(dev, dev->path, opaque);
+ }
++
++usbDeviceList *
++usbDeviceListNew(void)
++{
++    usbDeviceList *list;
++
++    if (VIR_ALLOC(list) < 0) {
++        virReportOOMError();
++        return NULL;
++    }
++
++    return list;
++}
++
++void
++usbDeviceListFree(usbDeviceList *list)
++{
++    int i;
++
++    if (!list)
++        return;
++
++    for (i = 0; i < list->count; i++)
++        usbFreeDevice(list->devs[i]);
++
++    VIR_FREE(list->devs);
++    VIR_FREE(list);
++}
++
++int
++usbDeviceListAdd(usbDeviceList *list,
++                 usbDevice *dev)
++{
++    if (usbDeviceListFind(list, dev)) {
++        usbReportError(VIR_ERR_INTERNAL_ERROR,
++                       _("Device %s is already in use"),
++                       dev->name);
++        return -1;
++    }
++
++    if (VIR_REALLOC_N(list->devs, list->count+1) < 0) {
++        virReportOOMError();
++        return -1;
++    }
++
++    list->devs[list->count++] = dev;
++
++    return 0;
++}
++
++usbDevice *
++usbDeviceListGet(usbDeviceList *list,
++                 int idx)
++{
++    if (idx >= list->count ||
++        idx < 0)
++        return NULL;
++
++    return list->devs[idx];
++}
++
++int
++usbDeviceListCount(usbDeviceList *list)
++{
++    return list->count;
++}
++
++usbDevice *
++usbDeviceListSteal(usbDeviceList *list,
++                   usbDevice *dev)
++{
++    usbDevice *ret = NULL;
++    int i;
++
++    for (i = 0; i < list->count; i++) {
++        if (list->devs[i]->bus != dev->bus ||
++            list->devs[i]->dev != dev->dev)
++            continue;
++
++        ret = list->devs[i];
++
++        if (i != list->count--)
++            memmove(&list->devs[i],
++                    &list->devs[i+1],
++                    sizeof(*list->devs) * (list->count - i));
++
++        if (VIR_REALLOC_N(list->devs, list->count) < 0) {
++            ; /* not fatal */
++        }
++
++        break;
++    }
++    return ret;
++}
++
++void
++usbDeviceListDel(usbDeviceList *list,
++                 usbDevice *dev)
++{
++    usbDevice *ret = usbDeviceListSteal(list, dev);
++    if (ret)
++        usbFreeDevice(ret);
++}
++
++usbDevice *
++usbDeviceListFind(usbDeviceList *list,
++                  usbDevice *dev)
++{
++    int i;
++
++    for (i = 0; i < list->count; i++) {
++        if (list->devs[i]->bus == dev->bus &&
++            list->devs[i]->dev == dev->dev)
++            return list->devs[i];
++    }
++
++    return NULL;
++}
+Index: libvirt-0.9.8/src/util/hostusb.h
+===================================================================
+--- libvirt-0.9.8.orig/src/util/hostusb.h	2013-02-22 12:03:31.102286469 -0600
++++ libvirt-0.9.8/src/util/hostusb.h	2013-02-22 12:03:31.098286470 -0600
+@@ -17,6 +17,7 @@
+  *
+  * Authors:
+  *     Daniel P. Berrange <berrange@redhat.com>
++ *     Michal Privoznik <mprivozn@redhat.com>
+  */
+ 
+ #ifndef __VIR_USB_H__
+@@ -25,12 +26,16 @@
+ # include "internal.h"
+ 
+ typedef struct _usbDevice usbDevice;
++typedef struct _usbDeviceList usbDeviceList;
+ 
+ usbDevice *usbGetDevice(unsigned bus,
+                         unsigned devno);
+ usbDevice *usbFindDevice(unsigned vendor,
+                          unsigned product);
+ void       usbFreeDevice (usbDevice *dev);
++void       usbDeviceSetUsedBy(usbDevice *dev, const char *name);
++const char *usbDeviceGetUsedBy(usbDevice *dev);
++const char *usbDeviceGetName(usbDevice *dev);
+ 
+ unsigned usbDeviceGetBus(usbDevice *dev);
+ unsigned usbDeviceGetDevno(usbDevice *dev);
+@@ -49,5 +54,18 @@ int usbDeviceFileIterate(usbDevice *dev,
+                          usbDeviceFileActor actor,
+                          void *opaque);
+ 
++usbDeviceList *usbDeviceListNew(void);
++void           usbDeviceListFree(usbDeviceList *list);
++int            usbDeviceListAdd(usbDeviceList *list,
++                                usbDevice *dev);
++usbDevice *    usbDeviceListGet(usbDeviceList *list,
++                                int idx);
++int            usbDeviceListCount(usbDeviceList *list);
++usbDevice *    usbDeviceListSteal(usbDeviceList *list,
++                                  usbDevice *dev);
++void           usbDeviceListDel(usbDeviceList *list,
++                                usbDevice *dev);
++usbDevice *    usbDeviceListFind(usbDeviceList *list,
++                                 usbDevice *dev);
+ 
+ #endif /* __VIR_USB_H__ */

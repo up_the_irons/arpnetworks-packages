@@ -1,0 +1,111 @@
+commit 7508338ff3b75b39ee9654e3d83bc58c858dc92a
+Author: Beat Jörg <Beat.Joerg@ssatr.ch>
+Date:   Wed May 23 07:50:02 2012 +0200
+
+    Fix for parallel port passthrough for QEMU
+    
+    I came across a bug that the command line generated for passthrough
+    of the host parallel port /dev/parport0 by libvirt for QEMU is incorrect.
+    
+    It currently produces:
+    -chardev tty,id=charparallel0,path=/dev/parport0
+    -device isa-parallel,chardev=charparallel0,id=parallel0
+    
+    The first parameter is "tty". It sould be "parport".
+    
+    If I launch qemu with -chardev parport,... it works as expected.
+    
+    I have already filled a bug report (
+    https://bugzilla.redhat.com/show_bug.cgi?id=823879 ), the topic was
+    already on the list some months ago:
+    
+    https://www.redhat.com/archives/libvirt-users/2011-September/msg00095.html
+    
+    Signed-off-by: Eric Blake <eblake@redhat.com>
+
+Index: libvirt-0.9.8/AUTHORS
+===================================================================
+--- libvirt-0.9.8.orig/AUTHORS	2013-10-14 10:31:22.532214257 -0500
++++ libvirt-0.9.8/AUTHORS	2013-10-14 10:31:22.496214256 -0500
+@@ -212,6 +212,7 @@
+   Christian Franke     <nobody@nowhere.ws>
+   Prerna Saxena        <prerna@linux.vnet.ibm.com>
+   Peter Feiner         <peter@gridcentric.ca>
++  Beat Jörg            <Beat.Joerg@ssatr.ch>
+ 
+   [....send patches to get your name here....]
+ 
+Index: libvirt-0.9.8/src/qemu/qemu_command.c
+===================================================================
+--- libvirt-0.9.8.orig/src/qemu/qemu_command.c	2013-10-14 10:31:22.532214257 -0500
++++ libvirt-0.9.8/src/qemu/qemu_command.c	2013-10-14 10:31:22.504214256 -0500
+@@ -2825,8 +2825,9 @@
+         break;
+ 
+     case VIR_DOMAIN_CHR_TYPE_DEV:
+-        virBufferAsprintf(&buf, "tty,id=char%s,path=%s", alias,
+-                          dev->data.file.path);
++        virBufferAsprintf(&buf, "%s,id=char%s,path=%s",
++                          STRPREFIX(alias, "parallel") ? "parport" : "tty",
++                          alias, dev->data.file.path);
+         break;
+ 
+     case VIR_DOMAIN_CHR_TYPE_FILE:
+Index: libvirt-0.9.8/tests/qemuxml2argvdata/qemuxml2argv-parallel-parport-chardev.args
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ libvirt-0.9.8/tests/qemuxml2argvdata/qemuxml2argv-parallel-parport-chardev.args	2013-10-14 10:31:22.504214256 -0500
+@@ -0,0 +1,7 @@
++LC_ALL=C PATH=/bin HOME=/home/test USER=test LOGNAME=test /usr/bin/qemu -S -M \
++pc -m 214 -smp 1 -nographic -nodefconfig -nodefaults -chardev socket,\
++id=charmonitor,path=/tmp/test-monitor,server,nowait -mon chardev=charmonitor,\
++id=monitor,mode=readline -no-acpi -boot c -hda /dev/HostVG/QEMUGuest1 \
++-chardev parport,id=charparallel0,path=/dev/parport0 -device \
++isa-parallel,chardev=charparallel0,id=parallel0 -usb -device \
++virtio-balloon-pci,id=balloon0,bus=pci.0,addr=0x3
+Index: libvirt-0.9.8/tests/qemuxml2argvdata/qemuxml2argv-parallel-parport-chardev.xml
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ libvirt-0.9.8/tests/qemuxml2argvdata/qemuxml2argv-parallel-parport-chardev.xml	2013-10-14 10:31:57.996215507 -0500
+@@ -0,0 +1,28 @@
++<domain type='qemu'>
++  <name>QEMUGuest1</name>
++  <uuid>c7a5fdbd-edaf-9455-926a-d65c16db1809</uuid>
++  <memory>219136</memory>
++  <vcpu>1</vcpu>
++  <os>
++    <type arch='i686' machine='pc'>hvm</type>
++    <boot dev='hd'/>
++  </os>
++  <clock offset='utc'/>
++  <on_poweroff>destroy</on_poweroff>
++  <on_reboot>restart</on_reboot>
++  <on_crash>destroy</on_crash>
++  <devices>
++    <emulator>/usr/bin/qemu</emulator>
++    <disk type='block' device='disk'>
++      <source dev='/dev/HostVG/QEMUGuest1'/>
++      <target dev='hda' bus='ide'/>
++      <address type='drive' controller='0' bus='0' unit='0'/>
++    </disk>
++    <controller type='ide' index='0'/>
++    <parallel type='dev'>
++      <source path='/dev/parport0'/>
++      <target port='0'/>
++    </parallel>
++    <memballoon model='virtio'/>
++  </devices>
++</domain>
+Index: libvirt-0.9.8/tests/qemuxml2argvtest.c
+===================================================================
+--- libvirt-0.9.8.orig/tests/qemuxml2argvtest.c	2013-10-14 10:31:22.532214257 -0500
++++ libvirt-0.9.8/tests/qemuxml2argvtest.c	2013-10-14 10:31:22.520214257 -0500
+@@ -526,6 +526,8 @@
+             QEMU_CAPS_CHARDEV, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG);
+     DO_TEST("parallel-tcp-chardev", false,
+             QEMU_CAPS_CHARDEV, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG);
++    DO_TEST("parallel-parport-chardev", false,
++            QEMU_CAPS_CHARDEV, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG);
+     DO_TEST("console-compat-chardev", false,
+             QEMU_CAPS_CHARDEV, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG);
+ 

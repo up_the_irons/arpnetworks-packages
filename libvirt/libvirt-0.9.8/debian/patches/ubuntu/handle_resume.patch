@@ -1,0 +1,172 @@
+From: Andres Lagar-Cavilla <andres@lagarcavilla.org>
+Description: Add RESUME event listener to qemu monitor
+Bug: https://bugzilla.redhat.com/show_bug.cgi?id=892791 
+Bug-Ubuntu: https://bugs.launchpad.net/ubuntu/+source/libvirt/+bug/1097824
+Origin: upstream, http://libvirt.org/git/?p=libvirt.git;a=commit;h=aedfcce33e4c2f266668a39fd655574fe34f1265
+Forwarded: not-needed
+Author: Andres Lagar-Cavilla <andres@lagarcavilla.org>
+Reviewed-By: Daniel P Berrange <berrange@redhat.com>
+
+Perform all the appropriate plumbing.
+
+When qemu/KVM VMs are paused manually through a monitor not-owned by libvirt,
+libvirt will think of them as "paused" event after they are resumed and
+effectively running. With this patch the discrepancy goes away
+
+This is a backport to "Raring Ringtail" (1.0.0-0ubuntu4) of libvirt's master
+branch commit aedfcce33e4c2f266668a39fd655574fe34f1265. It addresses libvirt's
+bugzilla #892791.
+
+This is of importance for the Openstack client software. In the Folsom version,
+nova-compute will destroy VMs that it finds in paused state. Without this
+patch, libvirt latches the pause state for VMs that are running, and they get
+destroyed unnecessarily.
+
+Index: libvirt-0.9.8/src/qemu/qemu_monitor.h
+===================================================================
+--- libvirt-0.9.8.orig/src/qemu/qemu_monitor.h	2013-02-22 11:23:03.000000000 -0600
++++ libvirt-0.9.8/src/qemu/qemu_monitor.h	2013-02-22 11:23:03.000000000 -0600
+@@ -95,6 +95,8 @@ struct _qemuMonitorCallbacks {
+                            virDomainObjPtr vm);
+     int (*domainStop)(qemuMonitorPtr mon,
+                       virDomainObjPtr vm);
++    int (*domainResume)(qemuMonitorPtr mon,
++                        virDomainObjPtr vm);
+     int (*domainRTCChange)(qemuMonitorPtr mon,
+                            virDomainObjPtr vm,
+                            long long offset);
+@@ -172,6 +174,7 @@ int qemuMonitorEmitShutdown(qemuMonitorP
+ int qemuMonitorEmitReset(qemuMonitorPtr mon);
+ int qemuMonitorEmitPowerdown(qemuMonitorPtr mon);
+ int qemuMonitorEmitStop(qemuMonitorPtr mon);
++int qemuMonitorEmitResume(qemuMonitorPtr mon);
+ int qemuMonitorEmitRTCChange(qemuMonitorPtr mon, long long offset);
+ int qemuMonitorEmitWatchdog(qemuMonitorPtr mon, int action);
+ int qemuMonitorEmitIOError(qemuMonitorPtr mon,
+Index: libvirt-0.9.8/src/qemu/qemu_monitor.c
+===================================================================
+--- libvirt-0.9.8.orig/src/qemu/qemu_monitor.c	2013-02-22 11:23:03.000000000 -0600
++++ libvirt-0.9.8/src/qemu/qemu_monitor.c	2013-02-22 11:23:03.000000000 -0600
+@@ -949,6 +949,16 @@ int qemuMonitorEmitStop(qemuMonitorPtr m
+ }
+ 
+ 
++int qemuMonitorEmitResume(qemuMonitorPtr mon)
++{
++    int ret = -1;
++    VIR_DEBUG("mon=%p", mon);
++
++    QEMU_MONITOR_CALLBACK(mon, ret, domainResume, mon->vm);
++    return ret;
++}
++
++
+ int qemuMonitorEmitRTCChange(qemuMonitorPtr mon, long long offset)
+ {
+     int ret = -1;
+Index: libvirt-0.9.8/src/qemu/qemu_monitor_json.c
+===================================================================
+--- libvirt-0.9.8.orig/src/qemu/qemu_monitor_json.c	2011-12-01 21:59:50.000000000 -0600
++++ libvirt-0.9.8/src/qemu/qemu_monitor_json.c	2013-02-22 11:23:03.000000000 -0600
+@@ -51,6 +51,7 @@ static void qemuMonitorJSONHandleShutdow
+ static void qemuMonitorJSONHandleReset(qemuMonitorPtr mon, virJSONValuePtr data);
+ static void qemuMonitorJSONHandlePowerdown(qemuMonitorPtr mon, virJSONValuePtr data);
+ static void qemuMonitorJSONHandleStop(qemuMonitorPtr mon, virJSONValuePtr data);
++static void qemuMonitorJSONHandleResume(qemuMonitorPtr mon, virJSONValuePtr data);
+ static void qemuMonitorJSONHandleRTCChange(qemuMonitorPtr mon, virJSONValuePtr data);
+ static void qemuMonitorJSONHandleWatchdog(qemuMonitorPtr mon, virJSONValuePtr data);
+ static void qemuMonitorJSONHandleIOError(qemuMonitorPtr mon, virJSONValuePtr data);
+@@ -65,6 +66,7 @@ struct {
+ } eventHandlers[] = {
+     { "SHUTDOWN", qemuMonitorJSONHandleShutdown, },
+     { "RESET", qemuMonitorJSONHandleReset, },
++    { "RESUME", qemuMonitorJSONHandleResume, },
+     { "POWERDOWN", qemuMonitorJSONHandlePowerdown, },
+     { "STOP", qemuMonitorJSONHandleStop, },
+     { "RTC_CHANGE", qemuMonitorJSONHandleRTCChange, },
+@@ -543,6 +545,11 @@ static void qemuMonitorJSONHandleStop(qe
+     qemuMonitorEmitStop(mon);
+ }
+ 
++static void qemuMonitorJSONHandleResume(qemuMonitorPtr mon, virJSONValuePtr data ATTRIBUTE_UNUSED)
++{
++    qemuMonitorEmitResume(mon);
++}
++
+ static void qemuMonitorJSONHandleRTCChange(qemuMonitorPtr mon, virJSONValuePtr data)
+ {
+     long long offset = 0;
+Index: libvirt-0.9.8/src/qemu/qemu_process.c
+===================================================================
+--- libvirt-0.9.8.orig/src/qemu/qemu_process.c	2011-12-07 20:26:59.000000000 -0600
++++ libvirt-0.9.8/src/qemu/qemu_process.c	2013-02-22 11:24:55.974325669 -0600
+@@ -556,6 +556,61 @@ unlock:
+ 
+ 
+ static int
++qemuProcessHandleResume(qemuMonitorPtr mon ATTRIBUTE_UNUSED,
++                        virDomainObjPtr vm)
++{
++    struct qemud_driver *driver = qemu_driver;
++    virDomainEventPtr event = NULL;
++
++    virDomainObjLock(vm);
++    if (virDomainObjGetState(vm, NULL) == VIR_DOMAIN_PAUSED) {
++        qemuDomainObjPrivatePtr priv = vm->privateData;
++
++        if (priv->gotShutdown) {
++            VIR_DEBUG("Ignoring RESUME event after SHUTDOWN");
++            goto unlock;
++        }
++
++        VIR_DEBUG("Transitioned guest %s out of paused into resumed state",
++                  vm->def->name);
++
++        virDomainObjSetState(vm, VIR_DOMAIN_RUNNING,
++                                 VIR_DOMAIN_RUNNING_UNPAUSED);
++        event = virDomainEventNewFromObj(vm,
++                                         VIR_DOMAIN_EVENT_RESUMED,
++                                         VIR_DOMAIN_EVENT_RESUMED_UNPAUSED);
++
++        VIR_DEBUG("Using lock state '%s' on resume event", NULLSTR(priv->lockState));
++        if (virDomainLockProcessResume(driver->lockManager, vm,
++                                       priv->lockState) < 0) {
++            /* Don't free priv->lockState on error, because we need
++             * to make sure we have state still present if the user
++             * tries to resume again
++             */
++            goto unlock;
++        }
++        VIR_FREE(priv->lockState);
++
++        if (virDomainSaveStatus(driver->caps, driver->stateDir, vm) < 0) {
++            VIR_WARN("Unable to save status on vm %s after state change",
++                     vm->def->name);
++        }
++    }
++
++unlock:
++    virDomainObjUnlock(vm);
++
++    if (event) {
++        qemuDriverLock(driver);
++        qemuDomainEventQueue(driver, event);
++        qemuDriverUnlock(driver);
++    }
++
++    return 0;
++}
++
++
++static int
+ qemuProcessHandleRTCChange(qemuMonitorPtr mon ATTRIBUTE_UNUSED,
+                            virDomainObjPtr vm,
+                            long long offset)
+@@ -857,6 +912,7 @@ static qemuMonitorCallbacks monitorCallb
+     .diskSecretLookup = qemuProcessFindVolumeQcowPassphrase,
+     .domainShutdown = qemuProcessHandleShutdown,
+     .domainStop = qemuProcessHandleStop,
++    .domainResume = qemuProcessHandleResume,
+     .domainReset = qemuProcessHandleReset,
+     .domainRTCChange = qemuProcessHandleRTCChange,
+     .domainWatchdog = qemuProcessHandleWatchdog,

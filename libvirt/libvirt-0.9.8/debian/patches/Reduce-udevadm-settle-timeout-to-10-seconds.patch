@@ -1,0 +1,24 @@
+From: =?UTF-8?q?Guido=20G=C3=BCnther?= <agx@sigxcpu.org>
+Date: Mon, 4 Jun 2012 16:18:52 +0200
+Subject: Reduce udevadm settle timeout to 10 seconds
+
+This isn't a proper fix but it will make virt-manager at least start.
+
+Closes: #663931
+---
+ src/util/util.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Index: libvirt-0.9.8/src/util/util.c
+===================================================================
+--- libvirt-0.9.8.orig/src/util/util.c	2011-12-01 21:59:50.000000000 -0600
++++ libvirt-0.9.8/src/util/util.c	2012-09-27 17:57:02.753442972 -0500
+@@ -2446,7 +2446,7 @@
+ void virFileWaitForDevices(void)
+ {
+ # ifdef UDEVADM
+-    const char *const settleprog[] = { UDEVADM, "settle", NULL };
++    const char *const settleprog[] = { UDEVADM, "settle", "--timeout=10", NULL };
+ # else
+     const char *const settleprog[] = { UDEVSETTLE, NULL };
+ # endif

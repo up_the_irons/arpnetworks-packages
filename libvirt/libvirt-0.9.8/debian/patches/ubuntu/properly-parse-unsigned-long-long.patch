@@ -1,0 +1,29 @@
+From d78035d06aab73a76a82c525f41580cf986cce7b Mon Sep 17 00:00:00 2001
+From: Guido Günther <agx@sigxcpu.org>
+Date: Sat, 13 Oct 2012 01:05:40 +0200
+Subject: [PATCH] Properly parse (unsigned) long long
+
+This fixes problems on platforms where sizeof(long) != sizeof(long long)
+like ia32.
+
+Origin: backport, http://libvirt.org/git/?p=libvirt.git;a=commit;h=d78035d06aab73a76a82c525f41580cf986cce7b
+Bug-Ubuntu: https://launchpad.net/bugs/1248394
+Last-Update: 2013-11-08
+Backported-by: Robie Basak <robie.basak@ubuntu.com>
+
+Backported to 0.9.8 by dropping one other changed line in the same hunk.
+---
+ python/generator.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+--- a/python/generator.py
++++ b/python/generator.py
+@@ -258,7 +258,7 @@
+     'double':  ('d', None, "double", "double"),
+     'unsigned int':  ('i', None, "int", "int"),
+     'unsigned long':  ('l', None, "long", "long"),
+-    'unsigned long long':  ('l', None, "longlong", "long long"),
++    'unsigned long long':  ('L', None, "longlong", "long long"),
+     'unsigned char *':  ('z', None, "charPtr", "char *"),
+     'char *':  ('z', None, "charPtr", "char *"),
+     'const char *':  ('z', None, "charPtrConst", "const char *"),

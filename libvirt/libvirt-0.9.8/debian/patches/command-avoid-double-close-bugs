@@ -1,0 +1,94 @@
+commit da831afcf2f6c0d3ed1ea3128a6208f548a05d8f
+Author: Eric Blake <eblake@redhat.com>
+Date:   Tue May 29 17:47:58 2012 -0600
+
+    command: avoid double close bugs
+    
+    KAMEZAWA Hiroyuki reported a nasty double-free bug when virCommand
+    is used to convert a string into input to a child command.  The
+    problem is that the poll() loop of virCommandProcessIO would close()
+    the write end of the pipe in order to let the child see EOF, then
+    the caller virCommandRun() would also close the same fd number, with
+    the second close possibly nuking an fd opened by some other thread
+    in the meantime.  This in turn can have all sorts of bad effects.
+    
+    The bug has been present since the introduction of virCommand in
+    commit f16ad06f.
+    
+    This is based on his first attempt at a patch, at
+    https://bugzilla.redhat.com/show_bug.cgi?id=823716
+    
+    * src/util/command.c (_virCommand): Drop inpipe member.
+    (virCommandProcessIO): Add argument, to avoid closing caller's fd
+    without informing caller.
+    (virCommandRun, virCommandNewArgs): Adjust clients.
+
+Index: libvirt-0.9.8/src/util/command.c
+===================================================================
+--- libvirt-0.9.8.orig/src/util/command.c	2011-12-04 01:15:00.000000000 -0600
++++ libvirt-0.9.8/src/util/command.c	2012-10-03 11:48:23.459954766 -0500
+@@ -86,7 +86,6 @@
+     char **errbuf;
+ 
+     int infd;
+-    int inpipe;
+     int outfd;
+     int errfd;
+     int *outfdptr;
+@@ -690,7 +689,6 @@
+     FD_ZERO(&cmd->preserve);
+     FD_ZERO(&cmd->transfer);
+     cmd->infd = cmd->outfd = cmd->errfd = -1;
+-    cmd->inpipe = -1;
+     cmd->pid = -1;
+ 
+     virCommandAddArgSet(cmd, args);
+@@ -1576,7 +1574,7 @@
+  * Manage input and output to the child process.
+  */
+ static int
+-virCommandProcessIO(virCommandPtr cmd)
++virCommandProcessIO(virCommandPtr cmd, int *inpipe)
+ {
+     int infd = -1, outfd = -1, errfd = -1;
+     size_t inlen = 0, outlen = 0, errlen = 0;
+@@ -1587,7 +1585,7 @@
+      * via pipe */
+     if (cmd->inbuf) {
+         inlen = strlen(cmd->inbuf);
+-        infd = cmd->inpipe;
++        infd = *inpipe;
+     }
+ 
+     /* With out/err buffer, the outfd/errfd have been filled with an
+@@ -1702,10 +1700,9 @@
+                 } else {
+                     inoff += done;
+                     if (inoff == inlen) {
+-                        int tmpfd ATTRIBUTE_UNUSED;
+-                        tmpfd = infd;
+-                        if (VIR_CLOSE(infd) < 0)
+-                            VIR_DEBUG("ignoring failed close on fd %d", tmpfd);
++                        if (VIR_CLOSE(*inpipe) < 0)
++                            VIR_DEBUG("ignoring failed close on fd %d", infd);
++                        infd = -1;
+                     }
+                 }
+             }
+@@ -1833,7 +1830,6 @@
+             return -1;
+         }
+         cmd->infd = infd[0];
+-        cmd->inpipe = infd[1];
+     }
+ 
+     /* If caller hasn't requested capture of stdout/err, then capture
+@@ -1869,7 +1865,7 @@
+     }
+ 
+     if (string_io)
+-        ret = virCommandProcessIO(cmd);
++        ret = virCommandProcessIO(cmd, &infd[1]);
+ 
+     if (virCommandWait(cmd, exitstatus) < 0)
+         ret = -1;

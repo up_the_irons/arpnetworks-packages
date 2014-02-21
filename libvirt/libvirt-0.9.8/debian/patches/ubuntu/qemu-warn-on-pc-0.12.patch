@@ -1,0 +1,44 @@
+Description: Warn when pc-0.12 is used.  It's not a reliable machine type.
+Author: Serge Hallyn <serge.hallyn@ubuntu.com>
+Forwarded: no
+Bug-Ubuntu: https://bugs.launchpad.net/bugs/1001625
+
+Index: libvirt-0.9.8/src/qemu/qemu_driver.c
+===================================================================
+--- libvirt-0.9.8.orig/src/qemu/qemu_driver.c	2012-05-22 20:00:10.000000000 +0000
++++ libvirt-0.9.8/src/qemu/qemu_driver.c	2012-05-22 22:50:34.846161253 +0000
+@@ -4787,6 +4787,14 @@
+ {
+     int i;
+ 
++    if (def->os.machine) {
++        if (STREQ(def->os.machine, "pc-0.12")) {
++            VIR_WARN("Defining machine %s as type %s.  We suggest a newer type.",
++                def->name, def->os.machine);
++            VIR_WARN("Please see the libvirt-migrate-qemu-machinetype(1) manpage.");
++        }
++    }
++
+     *canonical = NULL;
+ 
+     for (i = 0; i < info->nmachines; i++) {
+Index: libvirt-0.9.8/src/qemu/qemu_command.c
+===================================================================
+--- libvirt-0.9.8.orig/src/qemu/qemu_command.c	2012-05-22 20:00:10.000000000 +0000
++++ libvirt-0.9.8/src/qemu/qemu_command.c	2012-05-22 22:50:21.330162270 +0000
+@@ -3585,8 +3585,14 @@
+      * a machine in the capabilities data for QEMU. So this
+      * check is just here as a safety in case the unexpected
+      * happens */
+-    if (def->os.machine)
++    if (def->os.machine) {
++        if (STREQ(def->os.machine, "pc-0.12")) {
++            VIR_WARN("Starting machine %s with type %s.  We suggest a newer type.",
++                def->name, def->os.machine);
++            VIR_WARN("Please see the libvirt-migrate-qemu-machinetype(1) manpage.");
++        }
+         virCommandAddArgList(cmd, "-M", def->os.machine, NULL);
++    }
+ 
+     if (qemuBuildCpuArgStr(driver, def, emulator, qemuCaps,
+                            &ut, &cpu, &hasHwVirt) < 0)

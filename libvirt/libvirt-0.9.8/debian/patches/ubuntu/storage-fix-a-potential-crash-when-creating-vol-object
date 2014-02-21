@@ -1,0 +1,38 @@
+commit 380f326955a25f84dca45b4eead2a7aa4d11e6f2
+Author: Osier Yang <jyang@redhat.com>
+Date:   Mon Dec 12 15:26:20 2011 +0800
+
+    storage: Fix a potential crash when creating vol object
+    
+    If the vol object is newly created, it increases the volumes count,
+    but doesn't decrease the volumes count when do cleanup. It can
+    cause libvirtd to crash when one trying to free the volume objects
+    like:
+        for (i = 0; i < pool->volumes.count; i++)
+            virStorageVolDefFree(pool->volumes.objs[i]);
+    
+    It's more reliable if we add the newly created vol object in the
+    end.
+
+diff --git a/src/storage/storage_backend_logical.c b/src/storage/storage_backend_logical.c
+index d821717..6a235f6 100644
+--- a/src/storage/storage_backend_logical.c
++++ b/src/storage/storage_backend_logical.c
+@@ -110,7 +110,6 @@ virStorageBackendLogicalMakeVol(virStoragePoolObjPtr pool,
+             virReportOOMError();
+             goto cleanup;
+         }
+-        pool->volumes.objs[pool->volumes.count++] = vol;
+     }
+ 
+     if (vol->target.path == NULL) {
+@@ -254,6 +253,9 @@ virStorageBackendLogicalMakeVol(virStoragePoolObjPtr pool,
+         vol->source.nextent++;
+     }
+ 
++    if (is_new_vol)
++        pool->volumes.objs[pool->volumes.count++] = vol;
++
+     ret = 0;
+ 
+ cleanup:

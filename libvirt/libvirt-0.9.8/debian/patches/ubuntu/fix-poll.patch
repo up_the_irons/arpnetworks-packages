@@ -1,0 +1,78 @@
+Description: Fix errno check, prevent spurious errors under heavy load
+Origin: upstream
+Bug-Ubuntu: https://bugs.launchpad.net/ubuntu/+source/libvirt/+bug/1092826
+
+Index: libvirt-fix-1092826/AUTHORS
+===================================================================
+--- libvirt-fix-1092826.orig/AUTHORS	2012-12-22 18:59:17.587079659 +0000
++++ libvirt-fix-1092826/AUTHORS	2012-12-22 19:00:40.396055984 +0000
+@@ -211,6 +211,7 @@
+   Lorin Hochstein      <lorin@isi.edu>
+   Christian Franke     <nobody@nowhere.ws>
+   Prerna Saxena        <prerna@linux.vnet.ibm.com>
++  Peter Feiner         <peter@gridcentric.ca>
+ 
+   [....send patches to get your name here....]
+ 
+Index: libvirt-fix-1092826/src/rpc/virnetclient.c
+===================================================================
+--- libvirt-fix-1092826.orig/src/rpc/virnetclient.c	2012-12-22 18:59:17.597079534 +0000
++++ libvirt-fix-1092826/src/rpc/virnetclient.c	2012-12-22 19:00:58.855827772 +0000
+@@ -1,7 +1,7 @@
+ /*
+  * virnetclient.c: generic network RPC client
+  *
+- * Copyright (C) 2006-2011 Red Hat, Inc.
++ * Copyright (C) 2006-2012 Red Hat, Inc.
+  *
+  * This library is free software; you can redistribute it and/or
+  * modify it under the terms of the GNU Lesser General Public
+@@ -610,7 +610,7 @@
+ 
+     repoll:
+         ret = poll(fds, ARRAY_CARDINALITY(fds), -1);
+-        if (ret < 0 && errno == EAGAIN)
++        if (ret < 0 && (errno == EAGAIN || errno == EINTR))
+             goto repoll;
+ 
+         ignore_value(pthread_sigmask(SIG_BLOCK, &oldmask, NULL));
+@@ -634,7 +634,7 @@
+ 
+     repoll2:
+     ret = poll(fds, ARRAY_CARDINALITY(fds), -1);
+-    if (ret < 0 && errno == EAGAIN)
++    if (ret < 0 && (errno == EAGAIN || errno == EINTR))
+         goto repoll2;
+ 
+     ignore_value(pthread_sigmask(SIG_BLOCK, &oldmask, NULL));
+@@ -1356,7 +1356,7 @@
+ 
+     repoll:
+         ret = poll(fds, ARRAY_CARDINALITY(fds), timeout);
+-        if (ret < 0 && errno == EAGAIN)
++        if (ret < 0 && (errno == EAGAIN || errno == EINTR))
+             goto repoll;
+ 
+         ignore_value(pthread_sigmask(SIG_SETMASK, &oldmask, NULL));
+Index: libvirt-fix-1092826/src/util/event_poll.c
+===================================================================
+--- libvirt-fix-1092826.orig/src/util/event_poll.c	2012-12-22 18:59:17.587079659 +0000
++++ libvirt-fix-1092826/src/util/event_poll.c	2012-12-22 19:00:58.855827772 +0000
+@@ -1,7 +1,7 @@
+ /*
+  * event.c: event loop for monitoring file handles
+  *
+- * Copyright (C) 2007, 2010-2011 Red Hat, Inc.
++ * Copyright (C) 2007, 2010-2012 Red Hat, Inc.
+  * Copyright (C) 2007 Daniel P. Berrange
+  *
+  * This library is free software; you can redistribute it and/or
+@@ -620,7 +620,7 @@
+     ret = poll(fds, nfds, timeout);
+     if (ret < 0) {
+         EVENT_DEBUG("Poll got error event %d", errno);
+-        if (errno == EINTR) {
++        if (errno == EINTR || errno == EAGAIN) {
+             goto retry;
+         }
+         virReportSystemError(errno, "%s",
